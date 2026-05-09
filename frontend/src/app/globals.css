@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Enable class-based dark mode for Tailwind v4 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Industrial color palette for Construction AI */
+@theme {
+  --color-industrial-bg: #0e1014;
+  --color-industrial-surface: #16191f;
+  --color-industrial-surface-2: #1d2029;
+  --color-industrial-border: #272b36;
+  --color-industrial-accent: #f97316;
+  --color-industrial-accent-hover: #ea6c0a;
+  --color-industrial-accent-subtle: #231a0e;
+  --color-industrial-text: #e8eaed;
+  --color-industrial-muted: #8b909a;
+  --color-industrial-nav-hover: #1c2028;
+  --color-industrial-nav-active: #1a2133;
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
