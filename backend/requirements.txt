@@ -1,0 +1,14 @@
+# ConstructAI Backend – Python dependencies
+# Install with:  pip install -r requirements.txt
+
+fastapi==0.136.1
+uvicorn==0.46.0
+python-multipart==0.0.27
+pydantic==2.13.4
+PyJWT==2.12.1
+python-dotenv==1.2.2
+ultralytics==8.4.47
+torch==2.11.0
+torchvision==0.26.0
+opencv-python==4.13.0.92
+google-genai>=1.0.0
