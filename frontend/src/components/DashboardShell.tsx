@@ -81,7 +81,6 @@ export default function DashboardShell({ children }: DashboardShellProps) {
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           role={role}
-          username={username}
           onLogout={handleLogout}
         />
 
@@ -96,7 +95,10 @@ export default function DashboardShell({ children }: DashboardShellProps) {
 
         {/* Main area: offset by sidebar width on lg+ */}
         <div className="flex flex-col lg:pl-64 min-h-screen">
-          <TopNav onMenuClick={() => setSidebarOpen(true)} />
+          <TopNav
+            onMenuClick={() => setSidebarOpen(true)}
+            role={role}
+          />
 
           {/* Content: push below the fixed TopNav */}
           <main className="flex-1 overflow-y-auto pt-16">

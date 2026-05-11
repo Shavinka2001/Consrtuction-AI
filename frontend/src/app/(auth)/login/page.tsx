@@ -9,7 +9,7 @@ import api, { setApiToken } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
   const [loading, setLoading]   = useState(false);
@@ -24,7 +24,7 @@ export default function LoginPage() {
         access_token: string;
         role: string;
         username: string;
-      }>('http://127.0.0.1:8000/api/login', { username, password });
+      }>('http://127.0.0.1:8000/api/login', { email, password });
 
       // Persist token and role so DashboardShell can read them.
       setApiToken(data.access_token);
@@ -38,7 +38,7 @@ export default function LoginPage() {
       setError(
         typeof detail === 'string'
           ? detail
-          : 'Invalid username or password. Please try again.',
+          : 'Invalid email or password. Please try again.',
       );
     } finally {
       setLoading(false);
@@ -75,22 +75,22 @@ export default function LoginPage() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Username */}
+          {/* Email */}
           <div>
             <label
-              htmlFor="username"
+              htmlFor="email"
               className="block text-sm font-medium text-gray-700 mb-1.5"
             >
-              Username
+              Email
             </label>
             <input
-              id="username"
-              type="text"
-              autoComplete="username"
+              id="email"
+              type="email"
+              autoComplete="email"
               required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="e.g. admin"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@company.com"
               className="w-full bg-white border border-gray-300 rounded-lg px-3.5 py-2.5 text-gray-900 placeholder-gray-400 text-sm focus:outline-none focus:ring-2 focus:ring-industrial-accent focus:border-transparent transition"
             />
           </div>

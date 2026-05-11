@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, List
@@ -24,6 +26,7 @@ from google import genai
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from passlib.context import CryptContext
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -55,49 +58,82 @@ WEIGHTS_PATH = _ROOT / "weights" / "best.pt"
 UPLOAD_DIR   = _ROOT / "tmp" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── Dummy user database ────────────────────────────────────────────────────────
-# WARNING: plain-text passwords are acceptable ONLY for local development.
-# Replace with a real database + password hashing (bcrypt) before going live.
+# ── SQLite database ────────────────────────────────────────────────────────────
 
-USERS_DB: dict[str, dict] = {
-    "admin": {
-        "username":  "admin",
-        "password":  "123",
-        "role":      "Project Manager",
-        "full_name": "Admin User",
-    },
-    "site_eng": {
-        "username":  "site_eng",
-        "password":  "123",
-        "role":      "Site Engineer",
-        "full_name": "Site Engineer",
-    },
-    "architect": {
-        "username":  "architect",
-        "password":  "123",
-        "role":      "Architect",
-        "full_name": "Architect",
-    },
-    "qa_officer": {
-        "username":  "qa_officer",
-        "password":  "123",
-        "role":      "Compliance Officer",
-        "full_name": "QA Officer",
-    },
-    "qs_planner": {
-        "username":  "qs_planner",
-        "password":  "123",
-        "role":      "Quantity Surveyor",
-        "full_name": "QS Planner",
-    },
-}
+DB_PATH = _ROOT / "users.db"
+
+# ── Password hashing ───────────────────────────────────────────────────────────
+
+_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def _hash_password(plain: str) -> str:
+    return _pwd_context.hash(plain)
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    return _pwd_context.verify(plain, hashed)
+
+
+# ── DB helpers ─────────────────────────────────────────────────────────────────
+
+
+def _get_db() -> sqlite3.Connection:
+    """Open a connection to users.db with Row factory for dict-like access."""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+# Default users seeded once into the DB (plain-text passwords are hashed below).
+_DEFAULT_USERS: list[dict] = [
+    {"username": "admin",      "password": "123", "role": "Project Manager",    "email": "admin@constructai.local"},
+    {"username": "site_eng",   "password": "123", "role": "Site Engineer",      "email": "site_eng@constructai.local"},
+    {"username": "architect",  "password": "123", "role": "Architect",          "email": "architect@constructai.local"},
+    {"username": "qa_officer", "password": "123", "role": "Compliance Officer", "email": "qa_officer@constructai.local"},
+    {"username": "qs_planner", "password": "123", "role": "Quantity Surveyor",  "email": "qs_planner@constructai.local"},
+]
+
+
+def _init_db() -> None:
+    """Create the users table and seed default accounts (idempotent)."""
+    with _get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                role     TEXT NOT NULL,
+                email    TEXT
+            )
+            """
+        )
+        for u in _DEFAULT_USERS:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO users (username, password, role, email)
+                VALUES (?, ?, ?, ?)
+                """,
+                (u["username"], _hash_password(u["password"]), u["role"], u["email"]),
+            )
+        conn.commit()
+    logger.info("SQLite users.db initialised at %s", DB_PATH)
 
 # ── FastAPI app ────────────────────────────────────────────────────────────────
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):  # noqa: ARG001
+    _init_db()
+    yield
+
 
 app = FastAPI(
     title="ConstructAI API",
     description="AI-powered construction site analysis backend.",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
@@ -131,7 +167,7 @@ _bearer = HTTPBearer(auto_error=True)
 
 
 class LoginRequest(BaseModel):
-    username: str
+    email: str
     password: str
 
 
@@ -261,26 +297,30 @@ async def health() -> dict:
 )
 async def login(body: LoginRequest) -> LoginResponse:
     """
-    Accepts **username** + **password**, verifies against the in-memory user
-    store, and returns a signed JWT valid for 2 hours alongside the user role.
+    Accepts **email** + **password**, verifies against the SQLite users table,
+    and returns a signed JWT valid for 2 hours alongside the user role.
     """
-    user = USERS_DB.get(body.username)
+    with _get_db() as conn:
+        row = conn.execute(
+            "SELECT username, password, role FROM users WHERE email = ?",
+            (body.email,),
+        ).fetchone()
 
-    # Constant-time-ish check: validate both fields before rejecting
-    # so as not to leak whether the username exists.
-    if not user or user["password"] != body.password:
+    # Use constant-time comparison via passlib; reject generically to avoid
+    # leaking whether the email exists (OWASP A07 – Identification failures).
+    if row is None or not _verify_password(body.password, row["password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password.",
+            detail="Invalid email or password.",
         )
 
-    token = _create_token(sub=user["username"], role=user["role"])
-    logger.info("Login: user='%s' role='%s'", user["username"], user["role"])
+    token = _create_token(sub=row["username"], role=row["role"])
+    logger.info("Login: user='%s' role='%s'", row["username"], row["role"])
 
     return LoginResponse(
         access_token=token,
-        role=user["role"],
-        username=user["username"],
+        role=row["role"],
+        username=row["username"],
     )
 
 
@@ -293,23 +333,27 @@ async def login(body: LoginRequest) -> LoginResponse:
 )
 async def register(body: RegisterRequest) -> RegisterResponse:
     """
-    Creates a new user account in the in-memory store.
+    Creates a new user account in the SQLite users table.
     The role is provided by the caller (e.g. 'Project Manager', 'Site Engineer').
     Returns 400 if the username is already taken.
     """
-    if body.username in USERS_DB:
+    hashed_pw = _hash_password(body.password)
+    try:
+        with _get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO users (username, password, role, email)
+                VALUES (?, ?, ?, ?)
+                """,
+                (body.username, hashed_pw, body.role, body.email),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already exists.",
         )
 
-    USERS_DB[body.username] = {
-        "username":  body.username,
-        "email":     body.email,
-        "password":  body.password,
-        "role":      body.role,
-        "full_name": body.username,
-    }
     logger.info("Registered new user: '%s' role='%s'", body.username, body.role)
 
     return RegisterResponse(

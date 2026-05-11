@@ -13,6 +13,7 @@ import {
   Construction,
 } from 'lucide-react';
 import { useUserRole, type UserRole } from '@/components/DashboardShell';
+import ComplianceRoadmap from '@/components/ComplianceRoadmap';
 
 // ── Shared stat cards data (Project Manager / generic) ─────────────────────────
 
@@ -186,23 +187,7 @@ const ROLE_CONTENT: Record<UserRole, React.ReactNode> = {
     </div>
   ),
 
-  'Compliance Officer': (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-industrial-text tracking-tight">
-          Regulatory Approval &amp; Compliance Module
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-industrial-muted">
-          Review project compliance status and track regulatory approvals.
-        </p>
-      </div>
-      <PlaceholderPanel
-        icon={ShieldCheck}
-        title="Compliance Tracker"
-        description="Monitor open compliance items, pending approvals, and regulatory sign-offs across all active projects."
-      />
-    </div>
-  ),
+  'Compliance Officer': null,
 
   'Quantity Surveyor': (
     <div className="space-y-6">
@@ -228,7 +213,12 @@ const ROLE_CONTENT: Record<UserRole, React.ReactNode> = {
 export default function DashboardPage() {
   const { role } = useUserRole();
 
-  if (!role) return null; // shell handles the redirect; nothing to flash
+  if (!role) return null;
+
+  // Compliance Officer uses its own internal tab navigation
+  if (role === 'Compliance Officer') {
+    return <ComplianceRoadmap />;
+  }
 
   return <>{ROLE_CONTENT[role]}</>;
 }

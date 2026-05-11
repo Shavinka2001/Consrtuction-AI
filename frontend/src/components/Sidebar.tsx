@@ -12,16 +12,19 @@ import {
   HardHat,
   LogOut,
   X,
+  Layers,
 } from 'lucide-react';
 import type { UserRole } from './DashboardShell';
 
-// ── Role → nav items ───────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────
 
 interface NavItem {
-  label: string;
-  href:  string;
-  icon:  React.ElementType;
+  label:     string;
+  href:      string;
+  icon:      React.ElementType;
 }
+
+// ── Role → nav items ──────────────────────────────────────────────────────
 
 const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   'Project Manager': [
@@ -29,15 +32,16 @@ const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { label: 'User Management',    href: '/user-management', icon: Users },
   ],
   'Site Engineer': [
-    { label: 'Site Analysis',      href: '/',                icon: Map },
-    { label: 'Plan Upload',        href: '/upload',          icon: UploadCloud },
+    { label: 'Site Analysis',      href: '/',                  icon: Map },
+    { label: 'Plan Upload',        href: '/upload',            icon: UploadCloud },
+    { label: 'Clash Detection',    href: '/clash-detection',   icon: Layers },
   ],
   'Architect': [
-    { label: 'Clash Detection',    href: '/',                icon: LayoutDashboard },
-    { label: 'Plan Upload',        href: '/upload',          icon: UploadCloud },
+    { label: 'Clash Detection',    href: '/clash-detection',   icon: Layers },
+    { label: 'Plan Upload',        href: '/upload',            icon: UploadCloud },
   ],
   'Compliance Officer': [
-    { label: 'Compliance Module',  href: '/',                icon: ShieldCheck },
+    { label: 'Compliance Module', href: '/', icon: ShieldCheck },
   ],
   'Quantity Surveyor': [
     { label: 'Cost & Scheduling',  href: '/',                icon: DollarSign },
@@ -50,7 +54,6 @@ interface SidebarProps {
   isOpen:    boolean;
   onClose:   () => void;
   role:      UserRole | null;
-  username:  string | null;
   onLogout:  () => void;
 }
 
@@ -58,7 +61,6 @@ export default function Sidebar({
   isOpen,
   onClose,
   role,
-  username,
   onLogout,
 }: SidebarProps) {
   const pathname = usePathname();
@@ -71,8 +73,6 @@ export default function Sidebar({
         <SidebarContent
           pathname={pathname}
           navItems={navItems}
-          role={role}
-          username={username}
           onLogout={onLogout}
         />
       </aside>
@@ -93,8 +93,6 @@ export default function Sidebar({
         <SidebarContent
           pathname={pathname}
           navItems={navItems}
-          role={role}
-          username={username}
           onLogout={onLogout}
           onNavClick={onClose}
         />
@@ -108,15 +106,11 @@ export default function Sidebar({
 function SidebarContent({
   pathname,
   navItems,
-  role,
-  username,
   onLogout,
   onNavClick,
 }: {
   pathname:   string;
   navItems:   NavItem[];
-  role:       UserRole | null;
-  username:   string | null;
   onLogout:   () => void;
   onNavClick?: () => void;
 }) {
@@ -129,22 +123,6 @@ function SidebarContent({
           Construction <span className="text-industrial-accent">AI</span>
         </span>
       </div>
-
-      {/* User profile */}
-      {(role || username) && (
-        <div className="mx-3 mt-4 rounded-lg border border-industrial-border bg-industrial-surface-2 px-3.5 py-3">
-          {username && (
-            <p className="text-sm font-semibold text-industrial-text truncate leading-tight">
-              {username}
-            </p>
-          )}
-          {role && (
-            <span className="inline-flex items-center justify-center px-2.5 py-0.5 mt-1.5 text-xs font-medium rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-300 dark:border-indigo-500/20">
-              {role}
-            </span>
-          )}
-        </div>
-      )}
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">

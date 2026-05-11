@@ -6,9 +6,10 @@ import { Bell, UserCircle2, Menu, Sun, Moon } from 'lucide-react';
 
 interface TopNavProps {
   onMenuClick: () => void;
+  role:        string | null;
 }
 
-export default function TopNav({ onMenuClick }: TopNavProps) {
+export default function TopNav({ onMenuClick, role }: TopNavProps) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
@@ -62,13 +63,15 @@ export default function TopNav({ onMenuClick }: TopNavProps) {
 
         {/* User profile */}
         <button
-          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-industrial-muted dark:hover:bg-industrial-nav-hover dark:hover:text-industrial-text transition-colors"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-industrial-nav-hover transition-colors"
           aria-label="User profile"
         >
-          <UserCircle2 className="h-7 w-7" />
-          <span className="hidden sm:block text-sm font-medium text-gray-900 dark:text-industrial-text">
-            Site Manager
-          </span>
+          <UserCircle2 className="h-7 w-7 text-gray-500 dark:text-industrial-muted shrink-0" />
+          {role && (
+            <span className="hidden sm:block text-sm font-medium text-gray-600 dark:text-gray-300">
+              {role}
+            </span>
+          )}
         </button>
       </div>
     </header>

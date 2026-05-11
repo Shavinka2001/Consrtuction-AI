@@ -8,11 +8,14 @@ detection results. Requires a valid JWT Bearer token.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Annotated, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from google import genai
+from google.genai import types as genai_types
 from pydantic import BaseModel
 
 from app.dependencies.auth import require_auth
@@ -112,7 +115,48 @@ async def analyze_site(
             detail=f"File exceeds the {_MAX_FILE_SIZE_MB} MB size limit.",
         )
 
-    # ── 3. Save to a uniquely named temp file ─────────────────────────────────
+    # ── 3. Validate image content with Gemini ─────────────────────────────────
+    # Pass the raw bytes to Gemini 2.5 Flash to confirm the image is a blueprint
+    # before spending resources on YOLO inference.
+    try:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if api_key:
+            gemini_client = genai.Client(api_key=api_key)
+            validation_response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    genai_types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type=file.content_type,
+                    ),
+                    genai_types.Part.from_text(
+                        "Is this image a construction floor plan, architectural blueprint, "
+                        "or CAD drawing? Reply with strictly 'YES' or 'NO'."
+                    ),
+                ],
+            )
+            answer = (validation_response.text or "").strip().upper()
+            logger.info(
+                "Gemini blueprint validation answer for '%s': '%s'",
+                file.filename,
+                answer,
+            )
+            if "NO" in answer:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Invalid image detected. Please upload a valid "
+                        "construction blueprint or floor plan."
+                    ),
+                )
+    except HTTPException:
+        raise  # propagate the 400 immediately
+    except Exception as gemini_exc:
+        logger.warning(
+            "Gemini image validation skipped due to error: %s", gemini_exc
+        )
+
+    # ── 4. Save to a uniquely named temp file ─────────────────────────────────
     # Use a UUID prefix to avoid filename collisions under concurrent requests.
     original_suffix = Path(file.filename or "upload").suffix or ".jpg"
     tmp_filename = f"{uuid.uuid4().hex}{original_suffix}"
@@ -122,7 +166,7 @@ async def analyze_site(
         tmp_path.write_bytes(image_bytes)
         logger.info("Saved upload to %s (%d bytes)", tmp_path, len(image_bytes))
 
-        # ── 4. Run YOLOv8 inference ───────────────────────────────────────────
+        # ── 5. Run YOLOv8 inference ───────────────────────────────────────────
         result = yolo_service.run(tmp_path)
 
         if not result.success:
@@ -131,7 +175,7 @@ async def analyze_site(
                 detail=f"Inference failed: {result.error}",
             )
 
-        # ── 5. Build and return the response ──────────────────────────────────
+        # ── 6. Build and return the response ──────────────────────────────────
         detections = [_detection_to_schema(d) for d in result.detections]
 
         logger.info(
@@ -166,7 +210,7 @@ async def analyze_site(
         )
 
     finally:
-        # ── 6. Always clean up the temp file ──────────────────────────────────
+        # ── 7. Always clean up the temp file ──────────────────────────────────
         if tmp_path.exists():
             tmp_path.unlink()
             logger.debug("Deleted temporary file %s", tmp_path)
