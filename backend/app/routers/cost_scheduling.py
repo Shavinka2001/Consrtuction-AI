@@ -690,62 +690,99 @@ def get_lifecycle_service() -> LifecycleDegradationService:
 
 class LifecyclePredictionRequest(BaseModel):
     """
-    Placeholder feature set for the lifecycle degradation prediction model.
-
-    These four numeric features are used for initial testing.  Update the
-    field names, types, and valid ranges once your final model is trained —
-    the feature vector in ``lifecycle_service.predict()`` must be updated
-    to match the training pipeline exactly.
+    All 12 features expected by the XGBoost lifecycle model in exact training order:
+    building_type, foundation_type, superstructure_type, roofing_material,
+    exterior_finish, hvac_system, plumbing_system, electrical_system,
+    environmental_harshness, soil_acidity, maintenance_frequency, material_quality.
     """
 
-    material_quality: int = Field(
+    # ── Categorical features (8) ───────────────────────────────────────────────
+    building_type: str = Field(
         ...,
-        ge=1,
-        le=10,
-        description=(
-            "Overall quality of the primary structural material on a 1–10 scale. "
-            "1 = severely degraded / very poor quality; 10 = brand-new / premium grade."
-        ),
-        examples=[7],
+        description="Building usage class. Accepted: Residential, Commercial, Industrial, Institutional, Mixed-Use.",
+        examples=["Residential"],
     )
-    environmental_harshness: int = Field(
+    foundation_type: str = Field(
         ...,
-        ge=1,
-        le=10,
-        description=(
-            "Severity of the environmental exposure on a 1–10 scale. "
-            "1 = mild inland conditions; 10 = extreme coastal / industrial / cyclone zone."
-        ),
-        examples=[6],
+        description="Foundation system. Accepted: Strip, Pad, Raft, Pile, Caisson.",
+        examples=["Raft"],
+    )
+    superstructure_type: str = Field(
+        ...,
+        description="Primary structural system. Accepted: Timber Frame, Masonry, Reinforced Concrete, Steel Frame, Composite.",
+        examples=["Reinforced Concrete"],
+    )
+    roofing_material: str = Field(
+        ...,
+        description="Roof covering. Accepted: Asphalt Shingle, Metal Sheet, Clay Tile, Concrete Tile, Membrane.",
+        examples=["Concrete Tile"],
+    )
+    exterior_finish: str = Field(
+        ...,
+        description="External wall finish. Accepted: Painted Plaster, EIFS, Exposed Brick, Stone Veneer, Cladding.",
+        examples=["Painted Plaster"],
+    )
+    hvac_system: str = Field(
+        ...,
+        description="HVAC installation. Accepted: None, Natural Ventilation, Split AC, Central AC, VRF.",
+        examples=["Central AC"],
+    )
+    plumbing_system: str = Field(
+        ...,
+        description="Plumbing pipe material. Accepted: Galvanized Steel, Cast Iron, UPVC, PEX, Copper.",
+        examples=["UPVC"],
+    )
+    electrical_system: str = Field(
+        ...,
+        description="Electrical distribution. Accepted: Standard, Overhead, Underground, Solar-Integrated, None.",
+        examples=["Standard"],
+    )
+
+    # ── Numeric features (4) ───────────────────────────────────────────────────
+    environmental_harshness: float = Field(
+        ...,
+        ge=1.0,
+        le=10.0,
+        description="Environmental exposure severity. 1 = mild inland, 10 = extreme coastal / cyclone zone.",
+        examples=[6.0],
     )
     soil_acidity: float = Field(
         ...,
-        ge=3.0,
-        le=9.0,
-        description=(
-            "Site soil pH. Strongly acidic soils (pH < 5.5) accelerate foundation "
-            "and sub-structure corrosion. Neutral = 7.0."
-        ),
+        ge=0.0,
+        le=14.0,
+        description="Site soil pH. Values below 5.5 accelerate sub-structure corrosion. Neutral = 7.0.",
         examples=[6.5],
     )
-    maintenance_frequency: int = Field(
+    maintenance_frequency: float = Field(
         ...,
-        ge=1,
-        le=12,
-        description=(
-            "Interval between planned maintenance visits in months. "
-            "1 = monthly (highest frequency); 12 = once per year (lowest)."
-        ),
-        examples=[6],
+        ge=1.0,
+        le=12.0,
+        description="Months between planned maintenance visits. 1 = monthly, 12 = annually.",
+        examples=[6.0],
+    )
+    material_quality: float = Field(
+        ...,
+        ge=1.0,
+        le=10.0,
+        description="Overall quality of primary structural material. 1 = very poor, 10 = premium.",
+        examples=[7.0],
     )
 
     model_config = {
         "json_schema_extra": {
             "example": {
-                "material_quality": 7,
+                "building_type": "Residential",
+                "foundation_type": "Raft",
+                "superstructure_type": "Reinforced Concrete",
+                "roofing_material": "Concrete Tile",
+                "exterior_finish": "Painted Plaster",
+                "hvac_system": "Central AC",
+                "plumbing_system": "UPVC",
+                "electrical_system": "Standard",
                 "environmental_harshness": 6,
                 "soil_acidity": 6.5,
                 "maintenance_frequency": 6,
+                "material_quality": 8,
             }
         }
     }
@@ -819,18 +856,31 @@ async def predict_lifecycle(
     # ── Run prediction ─────────────────────────────────────────────────────────
     try:
         prediction = svc.predict(
-            material_quality=body.material_quality,
+            building_type=body.building_type,
+            foundation_type=body.foundation_type,
+            superstructure_type=body.superstructure_type,
+            roofing_material=body.roofing_material,
+            exterior_finish=body.exterior_finish,
+            hvac_system=body.hvac_system,
+            plumbing_system=body.plumbing_system,
+            electrical_system=body.electrical_system,
             environmental_harshness=body.environmental_harshness,
             soil_acidity=body.soil_acidity,
             maintenance_frequency=body.maintenance_frequency,
+            material_quality=body.material_quality,
         )
     except LifecycleModelNotAvailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         )
+    except ValueError as exc:
+        # Invalid categorical value — surface as 422
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
     except RuntimeError as exc:
-        # model.predict() raised — surface as 500 with actionable detail
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {exc}",
@@ -852,10 +902,18 @@ async def predict_lifecycle(
         expert_recommendation=advisory,
         model_confidence=prediction.confidence,
         input_echo={
-            "material_quality": body.material_quality,
+            "building_type": body.building_type,
+            "foundation_type": body.foundation_type,
+            "superstructure_type": body.superstructure_type,
+            "roofing_material": body.roofing_material,
+            "exterior_finish": body.exterior_finish,
+            "hvac_system": body.hvac_system,
+            "plumbing_system": body.plumbing_system,
+            "electrical_system": body.electrical_system,
             "environmental_harshness": body.environmental_harshness,
             "soil_acidity": body.soil_acidity,
             "maintenance_frequency": body.maintenance_frequency,
+            "material_quality": body.material_quality,
         },
     )
 

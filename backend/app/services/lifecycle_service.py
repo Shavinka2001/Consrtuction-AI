@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 import numpy as np
+import pandas as pd
 
 try:
     import joblib as _joblib
@@ -59,6 +60,85 @@ _RISK_THRESHOLDS: list[tuple[float, str]] = [
     (50.0, "Medium"),  # 30 ≤ lifespan < 50 → Medium
     (200.0, "Low"),    # lifespan ≥ 50      → Low
 ]
+
+# ── Feature column order (must match training pipeline EXACTLY) ──────────────────
+
+_FEATURE_COLUMNS: list[str] = [
+    "building_type",
+    "foundation_type",
+    "superstructure_type",
+    "roofing_material",
+    "exterior_finish",
+    "hvac_system",
+    "plumbing_system",
+    "electrical_system",
+    "environmental_harshness",
+    "soil_acidity",
+    "maintenance_frequency",
+    "material_quality",
+]
+
+# ── Label encoders (must match LabelEncoder.fit order from training) ───────────────
+# ⚠  Update these mappings if you retrain with different categories or order.
+
+_LABEL_ENCODERS: dict[str, dict[str, int]] = {
+    "building_type": {
+        "Residential":   0,
+        "Commercial":    1,
+        "Industrial":    2,
+        "Institutional": 3,
+        "Mixed-Use":     4,
+    },
+    "foundation_type": {
+        "Strip":   0,
+        "Pad":     1,
+        "Raft":    2,
+        "Pile":    3,
+        "Caisson": 4,
+    },
+    "superstructure_type": {
+        "Timber Frame":        0,
+        "Masonry":             1,
+        "Reinforced Concrete": 2,
+        "Steel Frame":         3,
+        "Composite":           4,
+    },
+    "roofing_material": {
+        "Asphalt Shingle": 0,
+        "Metal Sheet":     1,
+        "Clay Tile":       2,
+        "Concrete Tile":   3,
+        "Membrane":        4,
+    },
+    "exterior_finish": {
+        "Painted Plaster": 0,
+        "EIFS":            1,
+        "Exposed Brick":   2,
+        "Stone Veneer":    3,
+        "Cladding":        4,
+    },
+    "hvac_system": {
+        "None":                0,
+        "Natural Ventilation": 1,
+        "Split AC":            2,
+        "Central AC":          3,
+        "VRF":                 4,
+    },
+    "plumbing_system": {
+        "Galvanized Steel": 0,
+        "Cast Iron":        1,
+        "UPVC":             2,
+        "PEX":              3,
+        "Copper":           4,
+    },
+    "electrical_system": {
+        "Standard":         0,
+        "Overhead":         1,
+        "Underground":      2,
+        "Solar-Integrated": 3,
+        "None":             4,
+    },
+}
 
 
 # ── Return type ────────────────────────────────────────────────────────────────
@@ -148,31 +228,31 @@ class LifecycleDegradationService:
 
     def predict(
         self,
-        material_quality: int,
-        environmental_harshness: int,
+        building_type: str,
+        foundation_type: str,
+        superstructure_type: str,
+        roofing_material: str,
+        exterior_finish: str,
+        hvac_system: str,
+        plumbing_system: str,
+        electrical_system: str,
+        environmental_harshness: float,
         soil_acidity: float,
-        maintenance_frequency: int,
+        maintenance_frequency: float,
+        material_quality: float,
     ) -> LifecyclePrediction:
         """
         Run a lifecycle degradation prediction.
 
-        Parameters
-        ──────────
-        material_quality        – int  1 (very poor) to 10 (excellent)
-        environmental_harshness – int  1 (mild) to 10 (extreme/coastal)
-        soil_acidity            – float  pH value, typically 3.0 – 9.0
-        maintenance_frequency   – int  months between maintenance visits
-                                       (1 = monthly, 12 = annually)
-
-        Returns
-        ───────
-        LifecyclePrediction namedtuple with estimated lifespan, risk level,
-        and optional confidence score.
+        Categorical parameters are label-encoded using ``_LABEL_ENCODERS`` and
+        assembled into a pandas DataFrame with the exact column names and order
+        matching the model's training pipeline (``_FEATURE_COLUMNS``).
 
         Raises
         ──────
-        LifecycleModelNotAvailableError – model not loaded.
-        RuntimeError                    – model.predict() failed unexpectedly.
+        LifecycleModelNotAvailableError  – model not loaded.
+        ValueError                       – unrecognised categorical value.
+        RuntimeError                     – model.predict() raised unexpectedly.
         """
         if not self._available or self._model is None:
             raise LifecycleModelNotAvailableError(
@@ -180,16 +260,33 @@ class LifecycleDegradationService:
                 "Place lifecycle_model.pkl in backend/weights/ and restart the server."
             )
 
-        # Build 2-D feature array [[mq, eh, sa, mf]]
-        X = np.array(
-            [[
-                float(material_quality),
-                float(environmental_harshness),
-                float(soil_acidity),
-                float(maintenance_frequency),
-            ]],
-            dtype=np.float64,
-        )
+        # ── Label-encode categorical features ─────────────────────────────────
+        def _encode(feature: str, value: str) -> int:
+            mapping = _LABEL_ENCODERS.get(feature, {})
+            if value not in mapping:
+                raise ValueError(
+                    f"Unknown value '{value}' for feature '{feature}'. "
+                    f"Accepted: {list(mapping.keys())}"
+                )
+            return mapping[value]
+
+        row = {
+            "building_type":       _encode("building_type", building_type),
+            "foundation_type":     _encode("foundation_type", foundation_type),
+            "superstructure_type": _encode("superstructure_type", superstructure_type),
+            "roofing_material":    _encode("roofing_material", roofing_material),
+            "exterior_finish":     _encode("exterior_finish", exterior_finish),
+            "hvac_system":         _encode("hvac_system", hvac_system),
+            "plumbing_system":     _encode("plumbing_system", plumbing_system),
+            "electrical_system":   _encode("electrical_system", electrical_system),
+            "environmental_harshness": float(environmental_harshness),
+            "soil_acidity":            float(soil_acidity),
+            "maintenance_frequency":   float(maintenance_frequency),
+            "material_quality":        float(material_quality),
+        }
+
+        # Build DataFrame with exact column names in training order
+        X = pd.DataFrame([row], columns=_FEATURE_COLUMNS)
 
         try:
             raw = self._model.predict(X)
@@ -197,19 +294,16 @@ class LifecycleDegradationService:
             raise RuntimeError(f"Model prediction failed: {exc}") from exc
 
         lifespan_raw: float = float(raw[0]) if hasattr(raw, "__len__") else float(raw)
-        # Clip to a physically plausible range (1 – 200 years)
         lifespan = float(np.clip(lifespan_raw, 1.0, 200.0))
 
-        # Confidence score (classifiers only)
         confidence: Optional[float] = None
         if hasattr(self._model, "predict_proba"):
             try:
                 proba = self._model.predict_proba(X)
                 confidence = round(float(np.max(proba)), 4)
             except Exception:  # noqa: BLE001
-                pass  # confidence stays None for pure regression models
+                pass
 
-        # Derive risk level from predicted lifespan
         risk_level = "Low"
         for threshold, level in _RISK_THRESHOLDS:
             if lifespan < threshold:
@@ -217,9 +311,8 @@ class LifecycleDegradationService:
                 break
 
         logger.info(
-            "Lifecycle prediction | mq=%s eh=%s sa=%s mf=%s → %.1f yrs [%s]",
-            material_quality, environmental_harshness, soil_acidity, maintenance_frequency,
-            lifespan, risk_level,
+            "Lifecycle prediction | %s/%s → %.1f yrs [%s]",
+            building_type, superstructure_type, lifespan, risk_level,
         )
 
         return LifecyclePrediction(

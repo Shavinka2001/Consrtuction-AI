@@ -4,26 +4,41 @@ import { useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  Building2,
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Droplets,
   FlaskConical,
   Gauge,
   HardHat,
+  Home,
+  Layers,
   Loader2,
+  Paintbrush,
   ShieldAlert,
   Sparkles,
+  Wind,
   Wrench,
+  Zap,
 } from 'lucide-react';
 import api from '@/lib/api';
 
 // ── API types ─────────────────────────────────────────────────────────────────
 
 interface PredictionRequest {
-  material_quality: number;
+  building_type: string;
+  foundation_type: string;
+  superstructure_type: string;
+  roofing_material: string;
+  exterior_finish: string;
+  hvac_system: string;
+  plumbing_system: string;
+  electrical_system: string;
   environmental_harshness: number;
   soil_acidity: number;
   maintenance_frequency: number;
+  material_quality: number;
 }
 
 interface PredictionResponse {
@@ -37,17 +52,33 @@ interface PredictionResponse {
 // ── Form state ────────────────────────────────────────────────────────────────
 
 interface FormState {
-  material_quality: string;
+  building_type: string;
+  foundation_type: string;
+  superstructure_type: string;
+  roofing_material: string;
+  exterior_finish: string;
+  hvac_system: string;
+  plumbing_system: string;
+  electrical_system: string;
   environmental_harshness: string;
   soil_acidity: string;
   maintenance_frequency: string;
+  material_quality: string;
 }
 
 const DEFAULT_FORM: FormState = {
-  material_quality: '7',
+  building_type: 'Residential',
+  foundation_type: 'Raft',
+  superstructure_type: 'Reinforced Concrete',
+  roofing_material: 'Concrete Tile',
+  exterior_finish: 'Painted Plaster',
+  hvac_system: 'Central AC',
+  plumbing_system: 'UPVC',
+  electrical_system: 'Standard',
   environmental_harshness: '5',
   soil_acidity: '6.5',
   maintenance_frequency: '6',
+  material_quality: '7',
 };
 
 // ── Helper: risk-level config ─────────────────────────────────────────────────
@@ -159,7 +190,56 @@ function SliderField({
     </div>
   );
 }
+// ── Field options for dropdowns ──────────────────────────────────────────────
 
+const FIELD_OPTIONS = {
+  building_type: ['Residential', 'Commercial', 'Industrial', 'Institutional', 'Mixed-Use'],
+  foundation_type: ['Strip', 'Pad', 'Raft', 'Pile', 'Caisson'],
+  superstructure_type: ['Timber Frame', 'Masonry', 'Reinforced Concrete', 'Steel Frame', 'Composite'],
+  roofing_material: ['Asphalt Shingle', 'Metal Sheet', 'Clay Tile', 'Concrete Tile', 'Membrane'],
+  exterior_finish: ['Painted Plaster', 'EIFS', 'Exposed Brick', 'Stone Veneer', 'Cladding'],
+  hvac_system: ['None', 'Natural Ventilation', 'Split AC', 'Central AC', 'VRF'],
+  plumbing_system: ['Galvanized Steel', 'Cast Iron', 'UPVC', 'PEX', 'Copper'],
+  electrical_system: ['Standard', 'Overhead', 'Underground', 'Solar-Integrated', 'None'],
+};
+
+// ── Select input ─────────────────────────────────────────────────────────────
+
+interface SelectFieldProps {
+  id: string;
+  label: string;
+  icon: React.ElementType;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}
+
+function SelectField({ id, label, icon: Icon, value, options, onChange }: SelectFieldProps) {
+  return (
+    <div className="space-y-1.5">
+      <label
+        htmlFor={id}
+        className="flex items-center gap-1 text-[10px] font-semibold text-gray-600 uppercase tracking-wide"
+      >
+        <Icon className="h-3 w-3 text-orange-500 shrink-0" />
+        <span className="truncate">{label}</span>
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800
+          focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent cursor-pointer"
+      >
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function LifecyclePredictor() {
@@ -178,10 +258,18 @@ export default function LifecyclePredictor() {
     setResult(null);
 
     const payload: PredictionRequest = {
-      material_quality: parseInt(form.material_quality, 10),
-      environmental_harshness: parseInt(form.environmental_harshness, 10),
+      building_type: form.building_type,
+      foundation_type: form.foundation_type,
+      superstructure_type: form.superstructure_type,
+      roofing_material: form.roofing_material,
+      exterior_finish: form.exterior_finish,
+      hvac_system: form.hvac_system,
+      plumbing_system: form.plumbing_system,
+      electrical_system: form.electrical_system,
+      environmental_harshness: parseFloat(form.environmental_harshness),
       soil_acidity: parseFloat(form.soil_acidity),
-      maintenance_frequency: parseInt(form.maintenance_frequency, 10),
+      maintenance_frequency: parseFloat(form.maintenance_frequency),
+      material_quality: parseFloat(form.material_quality),
     };
 
     try {
@@ -239,60 +327,140 @@ export default function LifecyclePredictor() {
             </span>
             <div>
               <p className="text-sm font-semibold text-gray-900">Input Parameters</p>
-              <p className="text-[11px] text-gray-400">Placeholder features — adjust to match your model</p>
+              <p className="text-[11px] text-gray-400">12 features — matches model training pipeline</p>
             </div>
           </div>
 
           {/* Fields */}
-          <div className="px-5 py-5 space-y-6">
-            <SliderField
-              id="material_quality"
-              label="Material Quality"
-              description="Overall grade of the primary structural material. 1 = severely degraded, 10 = brand-new premium."
-              icon={HardHat}
-              value={form.material_quality}
-              min={1}
-              max={10}
-              step={1}
-              onChange={setField('material_quality')}
-            />
+          <div className="overflow-y-auto max-h-[72vh] px-5 py-5 space-y-6">
+            {/* ── Section: Structural System ────────────────────────────────── */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-orange-500 mb-3">
+                Structural System
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <SelectField
+                  id="building_type"
+                  label="Building Type"
+                  icon={Building2}
+                  value={form.building_type}
+                  options={FIELD_OPTIONS.building_type}
+                  onChange={setField('building_type')}
+                />
+                <SelectField
+                  id="foundation_type"
+                  label="Foundation"
+                  icon={Layers}
+                  value={form.foundation_type}
+                  options={FIELD_OPTIONS.foundation_type}
+                  onChange={setField('foundation_type')}
+                />
+                <SelectField
+                  id="superstructure_type"
+                  label="Superstructure"
+                  icon={HardHat}
+                  value={form.superstructure_type}
+                  options={FIELD_OPTIONS.superstructure_type}
+                  onChange={setField('superstructure_type')}
+                />
+                <SelectField
+                  id="roofing_material"
+                  label="Roofing"
+                  icon={Home}
+                  value={form.roofing_material}
+                  options={FIELD_OPTIONS.roofing_material}
+                  onChange={setField('roofing_material')}
+                />
+                <SelectField
+                  id="exterior_finish"
+                  label="Exterior Finish"
+                  icon={Paintbrush}
+                  value={form.exterior_finish}
+                  options={FIELD_OPTIONS.exterior_finish}
+                  onChange={setField('exterior_finish')}
+                />
+                <SelectField
+                  id="hvac_system"
+                  label="HVAC"
+                  icon={Wind}
+                  value={form.hvac_system}
+                  options={FIELD_OPTIONS.hvac_system}
+                  onChange={setField('hvac_system')}
+                />
+                <SelectField
+                  id="plumbing_system"
+                  label="Plumbing"
+                  icon={Droplets}
+                  value={form.plumbing_system}
+                  options={FIELD_OPTIONS.plumbing_system}
+                  onChange={setField('plumbing_system')}
+                />
+                <SelectField
+                  id="electrical_system"
+                  label="Electrical"
+                  icon={Zap}
+                  value={form.electrical_system}
+                  options={FIELD_OPTIONS.electrical_system}
+                  onChange={setField('electrical_system')}
+                />
+              </div>
+            </div>
 
-            <SliderField
-              id="environmental_harshness"
-              label="Environmental Harshness"
-              description="Exposure severity. 1 = mild inland, 10 = extreme coastal / industrial / cyclone zone."
-              icon={Gauge}
-              value={form.environmental_harshness}
-              min={1}
-              max={10}
-              step={1}
-              onChange={setField('environmental_harshness')}
-            />
+            <div className="border-t border-gray-100" />
 
-            <SliderField
-              id="soil_acidity"
-              label="Soil Acidity (pH)"
-              description="Site soil pH. Values below 5.5 accelerate sub-structure corrosion. Neutral = 7.0."
-              icon={FlaskConical}
-              value={form.soil_acidity}
-              min={3}
-              max={9}
-              step={0.1}
-              onChange={setField('soil_acidity')}
-            />
-
-            <SliderField
-              id="maintenance_frequency"
-              label="Maintenance Interval"
-              description="Months between planned maintenance visits. 1 = monthly, 12 = annually."
-              icon={Wrench}
-              value={form.maintenance_frequency}
-              min={1}
-              max={12}
-              step={1}
-              unit=" mo"
-              onChange={setField('maintenance_frequency')}
-            />
+            {/* ── Section: Site & Condition Metrics ──────────────────────── */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-orange-500 mb-3">
+                Site &amp; Condition Metrics
+              </p>
+              <div className="space-y-5">
+                <SliderField
+                  id="material_quality"
+                  label="Material Quality"
+                  description="Overall grade of the primary structural material. 1 = severely degraded, 10 = brand-new premium."
+                  icon={HardHat}
+                  value={form.material_quality}
+                  min={1}
+                  max={10}
+                  step={1}
+                  onChange={setField('material_quality')}
+                />
+                <SliderField
+                  id="environmental_harshness"
+                  label="Environmental Harshness"
+                  description="Exposure severity. 1 = mild inland, 10 = extreme coastal / industrial / cyclone zone."
+                  icon={Gauge}
+                  value={form.environmental_harshness}
+                  min={1}
+                  max={10}
+                  step={1}
+                  onChange={setField('environmental_harshness')}
+                />
+                <SliderField
+                  id="soil_acidity"
+                  label="Soil Acidity (pH)"
+                  description="Site soil pH. Values below 5.5 accelerate sub-structure corrosion. Neutral = 7.0."
+                  icon={FlaskConical}
+                  value={form.soil_acidity}
+                  min={0}
+                  max={14}
+                  step={0.1}
+                  onChange={setField('soil_acidity')}
+                />
+                <SliderField
+                  id="maintenance_frequency"
+                  label="Maintenance Interval"
+                  description="Months between planned maintenance visits. 1 = monthly, 12 = annually."
+                  icon={Wrench}
+                  value={form.maintenance_frequency}
+                  min={1}
+                  max={12}
+                  step={1}
+                  unit=" mo"
+                  onChange={setField('maintenance_frequency')}
+                />
+              </div>
+            </div>
           </div>
 
           {/* Submit */}
@@ -456,7 +624,8 @@ export default function LifecyclePredictor() {
                     Input Parameters Used
                   </p>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-gray-100">
+                {/* Numeric metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-gray-100 border-b border-gray-100">
                   {[
                     { label: 'Material Quality', value: result.input_echo.material_quality, unit: '/10' },
                     { label: 'Env. Harshness', value: result.input_echo.environmental_harshness, unit: '/10' },
@@ -470,6 +639,28 @@ export default function LifecyclePredictor() {
                       <p className="mt-1 text-lg font-bold text-gray-800 tabular-nums">
                         {value}
                         <span className="text-xs font-normal text-gray-400">{unit}</span>
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {/* Categorical features */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y divide-gray-100">
+                  {[
+                    { label: 'Building', value: result.input_echo.building_type },
+                    { label: 'Foundation', value: result.input_echo.foundation_type },
+                    { label: 'Structure', value: result.input_echo.superstructure_type },
+                    { label: 'Roofing', value: result.input_echo.roofing_material },
+                    { label: 'Exterior', value: result.input_echo.exterior_finish },
+                    { label: 'HVAC', value: result.input_echo.hvac_system },
+                    { label: 'Plumbing', value: result.input_echo.plumbing_system },
+                    { label: 'Electrical', value: result.input_echo.electrical_system },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="px-4 py-2.5 text-center">
+                      <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">
+                        {label}
+                      </p>
+                      <p className="mt-0.5 text-xs font-semibold text-gray-700 leading-tight">
+                        {value}
                       </p>
                     </div>
                   ))}
