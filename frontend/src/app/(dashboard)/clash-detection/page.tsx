@@ -34,6 +34,10 @@ interface ClashItem {
   elements: string;
   severity: Severity;
   location: string;
+  x: number;
+  y: number;
+  imgWidth: number;
+  imgHeight: number;
 }
 
 interface AnalysisDetection {
@@ -48,6 +52,8 @@ interface StoredAnalysis {
   detections: AnalysisDetection[];
   total_detections: number;
   blueprintUrl: string | null;
+  imageWidth?: number;
+  imageHeight?: number;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -56,6 +62,26 @@ function toSeverity(confidence: number): Severity {
   if (confidence >= 0.7) return 'High';
   if (confidence >= 0.4) return 'Medium';
   return 'Low';
+}
+
+function getProfessionalLocation(
+  x: number,
+  y: number,
+  originalWidth: number,
+  originalHeight: number,
+): { sector: string; pctX: number; pctY: number } {
+  const pctX = parseFloat(((x / originalWidth) * 100).toFixed(1));
+  const pctY = parseFloat(((y / originalHeight) * 100).toFixed(1));
+
+  const hZone = pctX <= 33 ? 'Left' : pctX <= 66 ? 'Center' : 'Right';
+  const vZone = pctY <= 33 ? 'Top'  : pctY <= 66 ? 'Middle' : 'Bottom';
+
+  const sector =
+    vZone === 'Middle' && hZone === 'Center'
+      ? 'Center Area'
+      : `${vZone}-${hZone} Area`;
+
+  return { sector, pctX, pctY };
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -261,21 +287,34 @@ function IssueDrawer({
               Location Details
             </h3>
             <div className="rounded-lg border border-gray-100 dark:border-industrial-border bg-gray-50 dark:bg-industrial-surface-2 p-3 space-y-2">
-              {issue.location.split(',').map((part, i) => {
-                const colonIdx = part.indexOf(':');
-                const key = colonIdx !== -1 ? part.slice(0, colonIdx).trim() : part.trim();
-                const val = colonIdx !== -1 ? part.slice(colonIdx + 1).trim() : '—';
-                return (
-                  <div key={i} className="flex items-center justify-between">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-industrial-muted">
-                      {key}
-                    </span>
-                    <span className="font-mono text-sm font-bold text-gray-900 dark:text-industrial-text">
-                      {val} px
-                    </span>
-                  </div>
+              {(() => {
+                const { sector, pctX, pctY } = getProfessionalLocation(
+                  issue.x,
+                  issue.y,
+                  issue.imgWidth,
+                  issue.imgHeight,
                 );
-              })}
+                return (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-industrial-muted">
+                        Sector
+                      </span>
+                      <span className="font-mono text-sm font-bold text-gray-900 dark:text-industrial-text">
+                        {sector}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-industrial-muted">
+                        Position
+                      </span>
+                      <span className="font-mono text-sm font-bold text-gray-900 dark:text-industrial-text">
+                        {pctX}%, {pctY}%
+                      </span>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </section>
 
@@ -400,9 +439,6 @@ export default function ClashDetectionPage() {
 
   // ── AI recommendation ──────────────────────────────────────────────────
   const fetchAIRecommendation = useCallback(async (issue: ClashItem) => {
-    const parts = issue.location.split(',');
-    const x = parseFloat(parts[0]?.split(':')[1] ?? '0');
-    const y = parseFloat(parts[1]?.split(':')[1] ?? '0');
     setIsGenerating(true);
     setAiRecommendation(null);
     try {
@@ -411,8 +447,8 @@ export default function ClashDetectionPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           className: issue.elements,
-          x,
-          y,
+          x: issue.x,
+          y: issue.y,
           severity: issue.severity,
         }),
       });
@@ -510,10 +546,14 @@ export default function ClashDetectionPage() {
   }));
 
   const derivedClashes: ClashItem[] = (analysis?.detections ?? []).map((d, i) => ({
-    id:       `DET-${String(i + 1).padStart(3, '0')}`,
-    elements: d.class_name,
-    severity: toSeverity(d.confidence),
-    location: `x: ${Math.round(d.bbox.x_min)}, y: ${Math.round(d.bbox.y_min)}`,
+    id:        `DET-${String(i + 1).padStart(3, '0')}`,
+    elements:  d.class_name,
+    severity:  toSeverity(d.confidence),
+    location:  `x: ${Math.round(d.bbox.x_min)}, y: ${Math.round(d.bbox.y_min)}`,
+    x:         Math.round(d.bbox.x_min),
+    y:         Math.round(d.bbox.y_min),
+    imgWidth:  analysis?.imageWidth  ?? 1000,
+    imgHeight: analysis?.imageHeight ?? 1000,
   }));
 
   const highCount = derivedClashes.filter((c) => c.severity === 'High').length;

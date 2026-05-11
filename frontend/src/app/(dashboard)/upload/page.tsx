@@ -224,11 +224,27 @@ export default function UploadPage() {
       const { data } = await api.post<AnalysisResponse>('/analyze-site', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+
+      // Capture natural image dimensions so clash-detection can compute accurate percentages
+      let imageWidth: number | undefined;
+      let imageHeight: number | undefined;
+      const previewUrl = uploadedFile?.previewUrl;
+      if (previewUrl && selectedFile.type.startsWith('image/')) {
+        await new Promise<void>((resolve) => {
+          const img = new window.Image();
+          img.onload  = () => { imageWidth = img.naturalWidth; imageHeight = img.naturalHeight; resolve(); };
+          img.onerror = () => resolve();
+          img.src = previewUrl;
+        });
+      }
+
       localStorage.setItem(
         'latest_analysis',
         JSON.stringify({
           ...data,
-          blueprintUrl: uploadedFile?.previewUrl ?? null,
+          blueprintUrl: previewUrl ?? null,
+          imageWidth,
+          imageHeight,
         }),
       );
       router.push('/clash-detection');
