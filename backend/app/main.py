@@ -19,7 +19,9 @@ from pydantic import BaseModel
 from app.core.database import close_mongo_connection, connect_to_mongo
 from app.routers.analyze import router as analyze_router
 from app.routers.compliance import router as compliance_router
+from app.routers.cost_scheduling import router as cost_router
 from app.services.compliance_service import ComplianceService
+from app.services.lifecycle_service import lifecycle_service
 from app.services.ml_risk_service import _ml_service as ml_risk_service
 
 # ── Environment ────────────────────────────────────────────────────────────────
@@ -46,6 +48,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     # Load ML risk model artefacts (uda_risk_model.pkl + label_encoder.pkl).
     # Safe to call when files are absent — logs a warning and disables ML mode.
     ml_risk_service.load()
+
+    # Load lifecycle degradation model (lifecycle_model.pkl).
+    # Safe to call when absent — logs a warning and service returns HTTP 503.
+    lifecycle_service.load()
+    logger.info(
+        "Lifecycle model status: available=%s error=%s",
+        lifecycle_service.available,
+        lifecycle_service.load_error,
+    )
 
     # Ensure compliance indexes exist (idempotent – safe to run every boot).
     from app.core.database import _client  # noqa: PLC0415
@@ -85,6 +96,7 @@ app.add_middleware(
 
 app.include_router(analyze_router, prefix="/api", tags=["Analysis"])
 app.include_router(compliance_router)   # prefix already set in the router
+app.include_router(cost_router)         # prefix /api/v1/project set in the router
 
 
 # ── Health check ───────────────────────────────────────────────────────────────

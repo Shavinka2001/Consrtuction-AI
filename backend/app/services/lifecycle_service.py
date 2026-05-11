@@ -52,6 +52,13 @@ logger = logging.getLogger(__name__)
 _WEIGHTS_DIR = Path(__file__).resolve().parents[2] / "weights"
 _MODEL_PATH  = _WEIGHTS_DIR / "lifecycle_model.pkl"
 
+# Emit path diagnostics at import time so they appear in the uvicorn startup log
+# even before load() is called.  Operators can verify the resolved path without
+# attaching a debugger.
+logger.info("[lifecycle_service] Weights directory : %s", _WEIGHTS_DIR)
+logger.info("[lifecycle_service] Model path       : %s", _MODEL_PATH)
+logger.info("[lifecycle_service] lifecycle_model.pkl exists: %s", _MODEL_PATH.exists())
+
 # ── Risk thresholds ────────────────────────────────────────────────────────────
 # Derived from predicted lifespan in years. Tune to match your risk appetite.
 
@@ -62,83 +69,17 @@ _RISK_THRESHOLDS: list[tuple[float, str]] = [
 ]
 
 # ── Feature column order (must match training pipeline EXACTLY) ──────────────────
+# Case-sensitive — these are the exact column names the model was trained with.
 
 _FEATURE_COLUMNS: list[str] = [
-    "building_type",
-    "foundation_type",
-    "superstructure_type",
-    "roofing_material",
-    "exterior_finish",
-    "hvac_system",
-    "plumbing_system",
-    "electrical_system",
-    "environmental_harshness",
-    "soil_acidity",
-    "maintenance_frequency",
-    "material_quality",
+    "Material_Type",
+    "Distance_to_Sea_m",
+    "Humidity_Level",
+    "Maintenance_Cost_Percentage",
 ]
 
-# ── Label encoders (must match LabelEncoder.fit order from training) ───────────────
-# ⚠  Update these mappings if you retrain with different categories or order.
-
-_LABEL_ENCODERS: dict[str, dict[str, int]] = {
-    "building_type": {
-        "Residential":   0,
-        "Commercial":    1,
-        "Industrial":    2,
-        "Institutional": 3,
-        "Mixed-Use":     4,
-    },
-    "foundation_type": {
-        "Strip":   0,
-        "Pad":     1,
-        "Raft":    2,
-        "Pile":    3,
-        "Caisson": 4,
-    },
-    "superstructure_type": {
-        "Timber Frame":        0,
-        "Masonry":             1,
-        "Reinforced Concrete": 2,
-        "Steel Frame":         3,
-        "Composite":           4,
-    },
-    "roofing_material": {
-        "Asphalt Shingle": 0,
-        "Metal Sheet":     1,
-        "Clay Tile":       2,
-        "Concrete Tile":   3,
-        "Membrane":        4,
-    },
-    "exterior_finish": {
-        "Painted Plaster": 0,
-        "EIFS":            1,
-        "Exposed Brick":   2,
-        "Stone Veneer":    3,
-        "Cladding":        4,
-    },
-    "hvac_system": {
-        "None":                0,
-        "Natural Ventilation": 1,
-        "Split AC":            2,
-        "Central AC":          3,
-        "VRF":                 4,
-    },
-    "plumbing_system": {
-        "Galvanized Steel": 0,
-        "Cast Iron":        1,
-        "UPVC":             2,
-        "PEX":              3,
-        "Copper":           4,
-    },
-    "electrical_system": {
-        "Standard":         0,
-        "Overhead":         1,
-        "Underground":      2,
-        "Solar-Integrated": 3,
-        "None":             4,
-    },
-}
+# Material_Type is already supplied as an integer (0, 1, 2) by the caller.
+# No label-encoding dictionary is needed for this model.
 
 
 # ── Return type ────────────────────────────────────────────────────────────────
@@ -190,6 +131,10 @@ class LifecycleDegradationService:
         self._available = False
         self._load_error = None
 
+        logger.info("[lifecycle_service.load] Attempting to load model from: %s", _MODEL_PATH)
+        logger.info("[lifecycle_service.load] File exists on disk: %s", _MODEL_PATH.exists())
+        logger.info("[lifecycle_service.load] Using joblib: %s", _USE_JOBLIB)
+
         try:
             if _USE_JOBLIB:
                 self._model = _joblib.load(_MODEL_PATH)
@@ -198,7 +143,10 @@ class LifecycleDegradationService:
                 with _MODEL_PATH.open("rb") as fh:
                     self._model = pickle.load(fh)  # noqa: S301 — trusted artefact
                 loader = "pickle"
-            logger.info("Lifecycle model loaded via %s from %s", loader, _MODEL_PATH)
+            logger.info(
+                "[lifecycle_service.load] Model loaded successfully via %s | type=%s",
+                loader, type(self._model).__name__,
+            )
             self._available = True
         except FileNotFoundError:
             self._load_error = (
@@ -207,12 +155,19 @@ class LifecycleDegradationService:
                 "The /predict-lifecycle endpoint will return HTTP 503 until the model is present."
             )
             logger.warning(
-                "lifecycle_model.pkl not found at %s — lifecycle predictions disabled.",
+                "[lifecycle_service.load] lifecycle_model.pkl not found at %s — lifecycle predictions disabled.",
                 _MODEL_PATH,
             )
         except Exception as exc:  # noqa: BLE001
-            self._load_error = f"Failed to load lifecycle model: {exc}"
-            logger.exception("Unexpected error loading lifecycle model: %s", exc)
+            self._load_error = (
+                f"Failed to load lifecycle model from {_MODEL_PATH}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            logger.exception(
+                "[lifecycle_service.load] Unexpected error loading lifecycle model — "
+                "check for version mismatch between training and serving environments. "
+                "Error: %s", exc,
+            )
 
     # ── Properties ─────────────────────────────────────────────────────────────
 
@@ -228,30 +183,20 @@ class LifecycleDegradationService:
 
     def predict(
         self,
-        building_type: str,
-        foundation_type: str,
-        superstructure_type: str,
-        roofing_material: str,
-        exterior_finish: str,
-        hvac_system: str,
-        plumbing_system: str,
-        electrical_system: str,
-        environmental_harshness: float,
-        soil_acidity: float,
-        maintenance_frequency: float,
-        material_quality: float,
+        Material_Type: int,
+        Distance_to_Sea_m: float,
+        Humidity_Level: float,
+        Maintenance_Cost_Percentage: float,
     ) -> LifecyclePrediction:
         """
         Run a lifecycle degradation prediction.
 
-        Categorical parameters are label-encoded using ``_LABEL_ENCODERS`` and
-        assembled into a pandas DataFrame with the exact column names and order
-        matching the model's training pipeline (``_FEATURE_COLUMNS``).
+        Assembles a pandas DataFrame with the exact 4 column names the model
+        was trained with (case-sensitive) and calls model.predict().
 
         Raises
         ──────
         LifecycleModelNotAvailableError  – model not loaded.
-        ValueError                       – unrecognised categorical value.
         RuntimeError                     – model.predict() raised unexpectedly.
         """
         if not self._available or self._model is None:
@@ -260,37 +205,28 @@ class LifecycleDegradationService:
                 "Place lifecycle_model.pkl in backend/weights/ and restart the server."
             )
 
-        # ── Label-encode categorical features ─────────────────────────────────
-        def _encode(feature: str, value: str) -> int:
-            mapping = _LABEL_ENCODERS.get(feature, {})
-            if value not in mapping:
-                raise ValueError(
-                    f"Unknown value '{value}' for feature '{feature}'. "
-                    f"Accepted: {list(mapping.keys())}"
-                )
-            return mapping[value]
-
         row = {
-            "building_type":       _encode("building_type", building_type),
-            "foundation_type":     _encode("foundation_type", foundation_type),
-            "superstructure_type": _encode("superstructure_type", superstructure_type),
-            "roofing_material":    _encode("roofing_material", roofing_material),
-            "exterior_finish":     _encode("exterior_finish", exterior_finish),
-            "hvac_system":         _encode("hvac_system", hvac_system),
-            "plumbing_system":     _encode("plumbing_system", plumbing_system),
-            "electrical_system":   _encode("electrical_system", electrical_system),
-            "environmental_harshness": float(environmental_harshness),
-            "soil_acidity":            float(soil_acidity),
-            "maintenance_frequency":   float(maintenance_frequency),
-            "material_quality":        float(material_quality),
+            "Material_Type":              int(Material_Type),
+            "Distance_to_Sea_m":          float(Distance_to_Sea_m),
+            "Humidity_Level":             float(Humidity_Level),
+            "Maintenance_Cost_Percentage": float(Maintenance_Cost_Percentage),
         }
 
         # Build DataFrame with exact column names in training order
         X = pd.DataFrame([row], columns=_FEATURE_COLUMNS)
 
+        logger.debug("Lifecycle prediction input DataFrame:\n%s", X.to_string())
+        logger.info(
+            "Running lifecycle prediction | Material_Type=%d Distance_to_Sea_m=%.1f "
+            "Humidity_Level=%.1f Maintenance_Cost_Percentage=%.2f",
+            Material_Type, Distance_to_Sea_m, Humidity_Level, Maintenance_Cost_Percentage,
+        )
+
         try:
             raw = self._model.predict(X)
+            logger.debug("Raw model output: %s", raw)
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Model predict() raised unexpectedly: %s", exc)
             raise RuntimeError(f"Model prediction failed: {exc}") from exc
 
         lifespan_raw: float = float(raw[0]) if hasattr(raw, "__len__") else float(raw)
@@ -311,8 +247,8 @@ class LifecycleDegradationService:
                 break
 
         logger.info(
-            "Lifecycle prediction | %s/%s → %.1f yrs [%s]",
-            building_type, superstructure_type, lifespan, risk_level,
+            "Lifecycle prediction | Material_Type=%d → %.1f yrs [%s]",
+            Material_Type, lifespan, risk_level,
         )
 
         return LifecyclePrediction(
