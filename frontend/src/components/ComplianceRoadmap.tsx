@@ -23,17 +23,109 @@ import {
   Activity,
   ClipboardList,
   ShieldAlert,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import PermitStepper from '@/components/PermitStepper';
 import type { WorkflowStatus } from '@/components/PermitStepper';
 import RiskAlertBanner from '@/components/RiskAlertBanner';
 import type { RiskAlert } from '@/components/RiskAlertBanner';
+import api from '@/lib/api';
+import type { ApiError } from '@/lib/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type ZoningType = 'RESIDENTIAL' | 'COMMERCIAL' | 'INDUSTRIAL' | 'MIXED_USE';
 type ConstructionType = 'NEW_CONSTRUCTION' | 'EXTENSION' | 'RENOVATION' | 'DEMOLITION';
 type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+
+// ── API response types ─────────────────────────────────────────────────────────
+
+interface ApiPermit {
+  id: string;
+  name: string;
+  authority: string;
+  icon_key: string;
+  estimated_fee_lkr: number;
+  min_days: number;
+  max_days: number;
+  mandatory: boolean;
+  risk_level: RiskLevel;
+  description: string;
+  required_documents: string[];
+  legal_reference: string;
+  phase: 1 | 2 | 3;
+}
+
+interface ApiRiskAlert {
+  id: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  title: string;
+  message: string;
+  penalty_lkr?: number | null;
+  daily_accrual_lkr?: number | null;
+  stop_work?: boolean;
+  statute?: string | null;
+  corrective_action?: string | null;
+}
+
+interface ApiRoadmapResponse {
+  permits: ApiPermit[];
+  risk_alerts: ApiRiskAlert[];
+  summary: {
+    total_permits: number;
+    mandatory_count: number;
+    estimated_total_fee_lkr: number;
+    max_timeline_days: number;
+    high_risk_count: number;
+  };
+}
+
+// ── Icon map (backend sends icon_key; we resolve it to a React component) ──────
+
+const PERMIT_ICON_MAP: Record<string, React.ElementType> = {
+  'uda':        Building2,
+  'local-auth': ClipboardCheck,
+  'cea':        Leaf,
+  'rda':        Map,
+  'fire':       Flame,
+  'electrical': Zap,
+  'water':      Droplets,
+  'coc':        BadgeCheck,
+  'occupancy':  HardHat,
+};
+
+function mapApiPermit(p: ApiPermit): PermitRequirement {
+  return {
+    id:                 p.id,
+    name:               p.name,
+    authority:          p.authority,
+    icon:               PERMIT_ICON_MAP[p.id] ?? FileText,
+    estimatedFeeLkr:    p.estimated_fee_lkr,
+    minDays:            p.min_days,
+    maxDays:            p.max_days,
+    mandatory:          p.mandatory,
+    riskLevel:          p.risk_level,
+    description:        p.description,
+    requiredDocuments:  p.required_documents,
+    legalReference:     p.legal_reference,
+    phase:              p.phase,
+  };
+}
+
+function mapApiRiskAlert(a: ApiRiskAlert): RiskAlert {
+  return {
+    id:              a.id,
+    severity:        a.severity,
+    title:           a.title,
+    message:         a.message,
+    penaltyLkr:      a.penalty_lkr ?? undefined,
+    dailyAccrualLkr: a.daily_accrual_lkr ?? undefined,
+    stopWork:        a.stop_work ?? false,
+    statute:         a.statute ?? undefined,
+    correctiveAction: a.corrective_action ?? undefined,
+  };
+}
 
 interface BuildingParams {
   floorArea: string;
@@ -99,275 +191,14 @@ const PHASE_DOT: Record<number, string> = {
   3: 'bg-emerald-400',
 };
 
-// ── Permit Fee Calculators ─────────────────────────────────────────────────────
-
-function calcUDAFee(area: number, zoning: ZoningType): number {
-  const rates: Record<ZoningType, number> = {
-    RESIDENTIAL: 50, COMMERCIAL: 100, INDUSTRIAL: 75, MIXED_USE: 85,
-  };
-  const mins: Record<ZoningType, number> = {
-    RESIDENTIAL: 5_000, COMMERCIAL: 10_000, INDUSTRIAL: 15_000, MIXED_USE: 10_000,
-  };
-  return Math.max(area * rates[zoning], mins[zoning]);
-}
-
-function calcLocalAuthorityFee(area: number, zoning: ZoningType): number {
-  const rates: Record<ZoningType, number> = {
-    RESIDENTIAL: 35, COMMERCIAL: 65, INDUSTRIAL: 55, MIXED_USE: 55,
-  };
-  return Math.max(area * rates[zoning], 4_000);
-}
-
-function calcFireSafetyFee(area: number, stories: number): number {
-  const base = stories >= 5 ? 80_000 : stories >= 3 ? 50_000 : 30_000;
-  return base + area * 15;
-}
-
-// ── Permit Catalogue ──────────────────────────────────────────────────────────
-
-function buildPermitList(params: BuildingParams): PermitRequirement[] {
-  const area = parseFloat(params.floorArea) || 0;
-  const stories = parseInt(params.stories, 10) || 1;
-  const { zoningType: zoning, constructionType } = params;
-  const isNew = constructionType === 'NEW_CONSTRUCTION';
-  const isDemo = constructionType === 'DEMOLITION';
-
-  const permits: PermitRequirement[] = [];
-
-  // ── Phase 1 ────────────────────────────────────────────────────────────────
-
-  // UDA Development Permission — always required for area > 100 sqm or new construction
-  if (isNew || isDemo || area > 100) {
-    permits.push({
-      id:          'uda',
-      name:        'UDA Development Permission',
-      authority:   'Urban Development Authority (UDA)',
-      icon:        Building2,
-      estimatedFeeLkr: calcUDAFee(area, zoning),
-      minDays:     21,
-      maxDays:     60,
-      mandatory:   true,
-      riskLevel:   'HIGH',
-      phase:       1,
-      description: 'Statutory approval from the Urban Development Authority for any development within UDA-regulated zones.',
-      requiredDocuments: [
-        'Survey plan certified by Licensed Surveyor',
-        'Architectural drawings (4 sets)',
-        'Deed of title / lease agreement',
-        'Structural drawings (for buildings > 3 stories)',
-        'Completed Form UDA/DP/01',
-      ],
-      legalReference: 'Urban Development Authority Law No. 41 of 1978, Section 14',
-    });
-  }
-
-  // Local Authority Building Plan Approval — always required
-  permits.push({
-    id:          'local-auth',
-    name:        'Local Authority Building Plan Approval',
-    authority:   'Municipal / Urban / Pradeshiya Sabha Council',
-    icon:        ClipboardCheck,
-    estimatedFeeLkr: calcLocalAuthorityFee(area, zoning),
-    minDays:     14,
-    maxDays:     45,
-    mandatory:   true,
-    riskLevel:   'HIGH',
-    phase:       1,
-    description: 'Building plan approval is mandatory before any construction activity. The relevant local authority verifies conformity with the building regulations.',
-    requiredDocuments: [
-      'Approved survey plan',
-      'Architectural drawings (stamped by Chartered Architect)',
-      'Structural design calculations',
-      'Soil test report (for > 2 stories)',
-      'Application form with owner signature',
-    ],
-    legalReference: 'Building Regulations 1986 under Local Authorities Ordinance, Section 23',
-  });
-
-  // CEA Environmental Clearance — for large or industrial projects
-  if (area > 500 || zoning === 'INDUSTRIAL' || zoning === 'COMMERCIAL') {
-    const feeTier = area > 2000 ? 150_000 : area > 500 ? 75_000 : 50_000;
-    permits.push({
-      id:          'cea',
-      name:        'CEA Environmental Clearance',
-      authority:   'Central Environmental Authority (CEA)',
-      icon:        Leaf,
-      estimatedFeeLkr: feeTier,
-      minDays:     30,
-      maxDays:     90,
-      mandatory:   zoning === 'INDUSTRIAL',
-      riskLevel:   'HIGH',
-      phase:       1,
-      description: 'Projects above 500 m² or in industrial/commercial zones require an environmental screening or Initial Environmental Examination (IEE).',
-      requiredDocuments: [
-        'Project Information Document (PID)',
-        'Environmental Impact Assessment report',
-        'Site plan showing buffer zones',
-        'Drainage disposal plan',
-        'EIA application form (CEA/EIA/01)',
-      ],
-      legalReference: 'National Environmental Act No. 47 of 1980, Section 23(cc)',
-    });
-  }
-
-  // Road Development Authority Permit — commercial, industrial, or large site
-  if (zoning === 'COMMERCIAL' || zoning === 'INDUSTRIAL' || area > 1000) {
-    permits.push({
-      id:          'rda',
-      name:        'Road Access / Deviation Permit',
-      authority:   'Road Development Authority (RDA)',
-      icon:        Map,
-      estimatedFeeLkr: zoning === 'INDUSTRIAL' ? 100_000 : 45_000,
-      minDays:     14,
-      maxDays:     30,
-      mandatory:   false,
-      riskLevel:   'MEDIUM',
-      phase:       1,
-      description: 'Required when construction activities involve or affect a national road, access deviation, or hoarding on a road reserve.',
-      requiredDocuments: [
-        'Site location plan',
-        'Traffic impact assessment',
-        'Proposed road access layout',
-        'RDA application form',
-      ],
-      legalReference: 'Road Development Authority Act No. 73 of 1981, Section 8',
-    });
-  }
-
-  // ── Phase 2 ────────────────────────────────────────────────────────────────
-
-  // Fire Safety Certificate — commercial, 3+ stories, or large area
-  if (stories >= 3 || area > 1000 || zoning === 'COMMERCIAL' || zoning === 'INDUSTRIAL') {
-    permits.push({
-      id:          'fire',
-      name:        'Fire Safety Certificate',
-      authority:   'Sri Lanka Fire Department / District Fire Brigade',
-      icon:        Flame,
-      estimatedFeeLkr: calcFireSafetyFee(area, stories),
-      minDays:     10,
-      maxDays:     30,
-      mandatory:   stories >= 3 || zoning === 'COMMERCIAL',
-      riskLevel:   stories >= 5 ? 'HIGH' : 'MEDIUM',
-      phase:       2,
-      description: 'Issued after inspection of fire suppression systems, emergency exits, fire-rated doors, and fire detection installations.',
-      requiredDocuments: [
-        'Fire protection system drawings',
-        'Fire compartmentation plan',
-        'Sprinkler system layout',
-        'Emergency evacuation plan',
-        'Hydrant installation certificate',
-      ],
-      legalReference: 'Fire Services Act No. 24 of 1974; SLSI SLS 1390 Fire Safety Standard',
-    });
-  }
-
-  // Electrical Board Connection Approval
-  if (isNew || constructionType === 'EXTENSION') {
-    const electricFee = stories >= 3 ? 45_000 : 20_000;
-    permits.push({
-      id:          'electrical',
-      name:        'Electrical Supply Connection Approval',
-      authority:   'Lanka Electricity Company (LECO) / Ceylon Electricity Board (CEB)',
-      icon:        Zap,
-      estimatedFeeLkr: electricFee,
-      minDays:     7,
-      maxDays:     21,
-      mandatory:   true,
-      riskLevel:   'MEDIUM',
-      phase:       2,
-      description: 'Approval for new electrical supply connection, including load application and metering installation inspection.',
-      requiredDocuments: [
-        'Electrical installation drawings',
-        'Single-line diagram',
-        'Load calculation sheet',
-        'Registered electrical contractor certification',
-        'Completed CEB/LECO application form',
-      ],
-      legalReference: 'Electricity Act No. 20 of 2009, Section 44; IEE Wiring Regulations BS 7671',
-    });
-  }
-
-  // Water & Drainage Board — new construction
-  if (isNew || constructionType === 'EXTENSION') {
-    permits.push({
-      id:          'water',
-      name:        'Water Supply & Drainage Connection',
-      authority:   'National Water Supply & Drainage Board (NWSDB)',
-      icon:        Droplets,
-      estimatedFeeLkr: 25_000,
-      minDays:     10,
-      maxDays:     25,
-      mandatory:   true,
-      riskLevel:   'MEDIUM',
-      phase:       2,
-      description: 'Connection approval for potable water supply and sewage/drainage tie-in to the municipal network.',
-      requiredDocuments: [
-        'Plumbing layout drawings',
-        'Sewage disposal plan',
-        'Water demand calculation',
-        'NWSDB application form',
-      ],
-      legalReference: 'National Water Supply & Drainage Board Law No. 2 of 1974, Section 15',
-    });
-  }
-
-  // ── Phase 3 ────────────────────────────────────────────────────────────────
-
-  // Certificate of Conformity — always required at the end
-  permits.push({
-    id:          'coc',
-    name:        'Certificate of Conformity (CoC)',
-    authority:   'Local Authority / Chartered Engineer',
-    icon:        BadgeCheck,
-    estimatedFeeLkr: 15_000,
-    minDays:     7,
-    maxDays:     21,
-    mandatory:   true,
-    riskLevel:   'HIGH',
-    phase:       3,
-    description: 'Issued by the local authority after final inspection confirms that all completed work conforms to the approved plans and building regulations.',
-    requiredDocuments: [
-      'As-built drawings',
-      'Structural completion certificate (Chartered Engineer)',
-      'Electrical inspection certificate',
-      'Plumbing completion certificate',
-      'Fire safety completion report',
-    ],
-    legalReference: 'Building Regulations 1986, Section 36; UDA Circular No. 2022/01',
-  });
-
-  // Occupancy Permit — commercial / multi-residential
-  if (zoning === 'COMMERCIAL' || zoning === 'INDUSTRIAL' || stories >= 3) {
-    permits.push({
-      id:          'occupancy',
-      name:        'Certificate of Occupancy',
-      authority:   'Local Authority / UDA',
-      icon:        HardHat,
-      estimatedFeeLkr: 20_000,
-      minDays:     14,
-      maxDays:     30,
-      mandatory:   true,
-      riskLevel:   'HIGH',
-      phase:       3,
-      description: 'Authorises legal occupation of the building. Issued only after all Phase 1 & 2 clearances and the Certificate of Conformity are in order.',
-      requiredDocuments: [
-        'Certificate of Conformity',
-        'Fire Safety Certificate',
-        'LECO/CEB connection certificate',
-        'NWSDB connection certificate',
-        'Structural completion report',
-      ],
-      legalReference: 'Urban Development Authority Law No. 41 of 1978, Section 19; Building Regulations 1986, Section 38',
-    });
-  }
-
-  return permits;
-}
-
 // ── Fee formatter ──────────────────────────────────────────────────────────────
 
 function formatLKR(amount: number): string {
-  return `LKR ${amount.toLocaleString('en-LK')}`;
+  return new Intl.NumberFormat('en-LK', {
+    style:    'currency',
+    currency: 'LKR',
+    maximumFractionDigits: 0,
+  }).format(amount);
 }
 
 // ── Animation variants ─────────────────────────────────────────────────────────
@@ -612,65 +443,20 @@ const DEMO_PERMIT_STATUSES: LivePermitStatus[] = [
   },
 ];
 
-const DEMO_RISK_ALERTS: RiskAlert[] = [
-  {
-    id:              'risk-001',
-    severity:        'CRITICAL',
-    title:           'Foundation Work Without UDA Approval',
-    message:         'Physical foundation activity has been detected on site (FOUNDATION_STARTED stage) while UDA Development Permission remains Under Review. This constitutes an unauthorised commencement of works.',
-    penaltyLkr:      500_000,
-    dailyAccrualLkr: 10_000,
-    stopWork:        true,
-    statute:         'Urban Development Authority Law No. 41 of 1978, Section 14; Building Regulations 1986, Section 8',
-    correctiveAction: 'Immediately halt all foundation and excavation work. Submit an urgent representation to the UDA with a site inspection request. Resume only upon written approval from the Authority.',
-  },
-  {
-    id:              'risk-002',
-    severity:        'HIGH',
-    title:           'Road Access Permit Rejected — Active Site Hoarding',
-    message:         'The RDA Road Access / Deviation Permit application was rejected, but site hoarding on the road reserve remains in place. Continued occupation is a statutory violation.',
-    penaltyLkr:      250_000,
-    dailyAccrualLkr: 5_000,
-    stopWork:        false,
-    statute:         'Road Development Authority Act No. 73 of 1981, Section 8',
-    correctiveAction: 'Remove all hoarding from the road reserve immediately. Engage a transport engineer to address the gaps in the traffic impact assessment before resubmitting.',
-  },
-  {
-    id:              'risk-003',
-    severity:        'MEDIUM',
-    title:           'CEA Clearance Pending — Site Drainage Works Commenced',
-    message:         'Drainage diversion works have commenced on site before CEA Environmental Clearance has been granted. This may constitute a violation of the National Environmental Act.',
-    penaltyLkr:      75_000,
-    dailyAccrualLkr: 1_000,
-    stopWork:        false,
-    statute:         'National Environmental Act No. 47 of 1980, Section 23(cc)',
-    correctiveAction: 'Pause drainage modification works. Ensure all site runoff controls are in place. Expedite the IEE submission to CEA and seek interim written confirmation of acceptable site management.',
-  },
-  {
-    id:       'risk-004',
-    severity: 'LOW',
-    title:    'Fire Safety Documents Not Yet Initiated',
-    message:  'Project has advanced to structural framing stage but the Fire Safety Certificate application is still at Document Gathering phase. Early engagement with the Fire Department is recommended.',
-    statute:  'Fire Services Act No. 24 of 1974; SLSI SLS 1390',
-    correctiveAction: 'Appoint a fire safety consultant and commence preparation of fire protection system drawings and evacuation plans. Submit the Fire Safety Certificate application before roofing begins.',
-  },
-];
-
 // ── Tab bar config ─────────────────────────────────────────────────────────────
 
 type DashboardTab = 'roadmap' | 'progress' | 'risk';
 
 interface TabConfig {
-  id:       DashboardTab;
-  label:    string;
-  icon:     React.ElementType;
-  alertDot?: boolean;
+  id:    DashboardTab;
+  label: string;
+  icon:  React.ElementType;
 }
 
 const TABS: TabConfig[] = [
-  { id: 'roadmap',  label: 'Approval Roadmap', icon: ClipboardList               },
-  { id: 'progress', label: 'Live Progress',    icon: Activity                    },
-  { id: 'risk',     label: 'Risk Warnings',    icon: ShieldAlert, alertDot: true },
+  { id: 'roadmap',  label: 'Approval Roadmap', icon: ClipboardList },
+  { id: 'progress', label: 'Live Progress',    icon: Activity      },
+  { id: 'risk',     label: 'Risk Warnings',    icon: ShieldAlert   },
 ];
 
 // ── Main Component ─────────────────────────────────────────────────────────────
@@ -684,12 +470,15 @@ const DEFAULT_PARAMS: BuildingParams = {
 };
 
 export default function ComplianceRoadmap({ activeView }: { activeView?: DashboardTab }) {
-  const [activeTab, setActiveTab] = useState<DashboardTab>(activeView ?? 'roadmap');
-  const [params, setParams]     = useState<BuildingParams>(DEFAULT_PARAMS);
-  const [generated, setGenerated] = useState(false);
-  const [errors, setErrors]     = useState<Partial<Record<keyof BuildingParams, string>>>({});
-  const [riskAlerts, setRiskAlerts] = useState<RiskAlert[]>(DEMO_RISK_ALERTS);
-  const [liveStatuses] = useState<LivePermitStatus[]>(DEMO_PERMIT_STATUSES);
+  const [activeTab, setActiveTab]   = useState<DashboardTab>(activeView ?? 'roadmap');
+  const [params, setParams]         = useState<BuildingParams>(DEFAULT_PARAMS);
+  const [generated, setGenerated]   = useState(false);
+  const [isLoading, setIsLoading]   = useState(false);
+  const [apiError, setApiError]     = useState<string | null>(null);
+  const [errors, setErrors]         = useState<Partial<Record<keyof BuildingParams, string>>>({});
+  const [permits, setPermits]       = useState<PermitRequirement[]>([]);
+  const [riskAlerts, setRiskAlerts] = useState<RiskAlert[]>([]);
+  const [liveStatuses]              = useState<LivePermitStatus[]>(DEMO_PERMIT_STATUSES);
 
   function update<K extends keyof BuildingParams>(key: K, val: BuildingParams[K]) {
     setParams((p) => ({ ...p, [key]: val }));
@@ -706,22 +495,45 @@ export default function ComplianceRoadmap({ activeView }: { activeView?: Dashboa
     return Object.keys(next).length === 0;
   }
 
-  function handleGenerate(e: React.FormEvent) {
+  async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) return;
-    setGenerated(true);
+
+    setIsLoading(true);
+    setApiError(null);
+
+    try {
+      const response = await api.post<ApiRoadmapResponse>('/v1/compliance/roadmap', {
+        floor_area:        parseFloat(params.floorArea),
+        stories:           parseInt(params.stories, 10),
+        zoning_type:       params.zoningType,
+        construction_type: params.constructionType,
+        project_value_lkr: params.projectValueLkr
+          ? parseFloat(params.projectValueLkr)
+          : null,
+      });
+
+      setPermits(response.data.permits.map(mapApiPermit));
+      setRiskAlerts(response.data.risk_alerts.map(mapApiRiskAlert));
+      setGenerated(true);
+    } catch (err) {
+      const apiErr = err as ApiError;
+      setApiError(
+        apiErr.friendlyMessage ?? 'Failed to generate roadmap. Please try again.',
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   function handleReset() {
     setParams(DEFAULT_PARAMS);
     setErrors({});
     setGenerated(false);
+    setPermits([]);
+    setRiskAlerts([]);
+    setApiError(null);
   }
-
-  const permits = useMemo(
-    () => (generated ? buildPermitList(params) : []),
-    [generated, params],
-  );
 
   const byPhase = useMemo(() => {
     const map: Record<number, PermitRequirement[]> = { 1: [], 2: [], 3: [] };
@@ -756,7 +568,7 @@ export default function ComplianceRoadmap({ activeView }: { activeView?: Dashboa
       {/* ── Top Tab Bar ──────────────────────────────────────────────────────── */}
       <motion.div variants={fadeUp}>
         <div className="relative flex items-center gap-1 rounded-xl border border-slate-200 bg-white shadow-sm p-1 w-fit">
-          {TABS.map(({ id, label, icon: TabIcon, alertDot }) => (
+          {TABS.map(({ id, label, icon: TabIcon }) => (
             <button
               key={id}
               type="button"
@@ -776,7 +588,7 @@ export default function ComplianceRoadmap({ activeView }: { activeView?: Dashboa
               )}
               <TabIcon className="relative h-4 w-4 shrink-0" />
               <span className="relative leading-none">{label}</span>
-              {alertDot && (
+              {id === 'risk' && riskAlerts.length > 0 && (
                 <span className="relative flex h-2 w-2 shrink-0">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
@@ -890,12 +702,30 @@ export default function ComplianceRoadmap({ activeView }: { activeView?: Dashboa
 
               {/* Actions */}
               <div className="flex flex-col gap-2.5">
+                {/* API error banner */}
+                {apiError && (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5">
+                    <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-red-600 leading-relaxed">{apiError}</p>
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-industrial-accent hover:bg-industrial-accent-hover text-white text-sm font-bold px-4 py-2.5 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-industrial-accent focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                  disabled={isLoading}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-industrial-accent hover:bg-industrial-accent-hover disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold px-4 py-2.5 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-industrial-accent focus-visible:ring-offset-2 focus-visible:ring-offset-white"
                 >
-                  <ShieldCheck className="h-4 w-4" />
-                  Generate Permit Roadmap
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Generating…
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="h-4 w-4" />
+                      Generate Permit Roadmap
+                    </>
+                  )}
                 </button>
                 {generated && (
                   <button

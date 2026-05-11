@@ -8,12 +8,12 @@ import {
   Clock,
   Map,
   ShieldCheck,
-  DollarSign,
   Users,
   Construction,
 } from 'lucide-react';
 import { useUserRole, type UserRole } from '@/components/DashboardShell';
 import ComplianceRoadmap from '@/components/ComplianceRoadmap';
+import LifecyclePredictor from '@/components/LifecyclePredictor';
 
 // ── Shared stat cards data (Project Manager / generic) ─────────────────────────
 
@@ -189,23 +189,7 @@ const ROLE_CONTENT: Record<UserRole, React.ReactNode> = {
 
   'Compliance Officer': null,
 
-  'Quantity Surveyor': (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-industrial-text tracking-tight">
-          Intelligent Cost &amp; Scheduling Module
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-industrial-muted">
-          AI-assisted cost estimation, Bill of Quantities generation, and schedule analysis.
-        </p>
-      </div>
-      <PlaceholderPanel
-        icon={DollarSign}
-        title="Cost &amp; Schedule Analysis"
-        description="Leverage AI to generate accurate BOQ estimates and optimise project timelines based on current site data."
-      />
-    </div>
-  ),
+  'Quantity Surveyor': <LifecyclePredictor />,
 };
 
 // ── Page ───────────────────────────────────────────────────────────────────────

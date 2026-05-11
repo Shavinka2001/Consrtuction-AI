@@ -408,6 +408,504 @@ async def predict_risk(
     )
 
 
+# ── POST /api/v1/compliance/roadmap ───────────────────────────────────────────
+# Declared BEFORE /{project_id}/... routes so the static segment 'roadmap'
+# is never mistaken for a project_id value.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class RoadmapBuildingParams(BaseModel):
+    floor_area: float = Field(..., gt=0, description="Total floor area in m²")
+    stories: int = Field(..., ge=1, le=200, description="Number of stories")
+    zoning_type: str = Field(
+        ...,
+        pattern="^(RESIDENTIAL|COMMERCIAL|INDUSTRIAL|MIXED_USE)$",
+        description="Zoning classification",
+    )
+    construction_type: str = Field(
+        ...,
+        pattern="^(NEW_CONSTRUCTION|EXTENSION|RENOVATION|DEMOLITION)$",
+        description="Construction type",
+    )
+    project_value_lkr: float | None = Field(
+        None, ge=0, description="Estimated project value in LKR (optional)"
+    )
+
+
+class RoadmapPermitItem(BaseModel):
+    id: str
+    name: str
+    authority: str
+    icon_key: str
+    estimated_fee_lkr: float
+    min_days: int
+    max_days: int
+    mandatory: bool
+    risk_level: str
+    description: str
+    required_documents: list[str]
+    legal_reference: str
+    phase: int
+
+
+class RoadmapRiskAlert(BaseModel):
+    id: str
+    severity: str
+    title: str
+    message: str
+    penalty_lkr: float | None = None
+    daily_accrual_lkr: float | None = None
+    stop_work: bool = False
+    statute: str | None = None
+    corrective_action: str | None = None
+
+
+class RoadmapSummary(BaseModel):
+    total_permits: int
+    mandatory_count: int
+    estimated_total_fee_lkr: float
+    max_timeline_days: int
+    high_risk_count: int
+
+
+class RoadmapResponse(BaseModel):
+    permits: list[RoadmapPermitItem]
+    risk_alerts: list[RoadmapRiskAlert]
+    summary: RoadmapSummary
+
+
+# ── Fee helpers ────────────────────────────────────────────────────────────────
+
+
+def _uda_fee(area: float, zoning: str) -> float:
+    rates = {"RESIDENTIAL": 50, "COMMERCIAL": 100, "INDUSTRIAL": 75, "MIXED_USE": 85}
+    mins  = {"RESIDENTIAL": 5_000, "COMMERCIAL": 10_000, "INDUSTRIAL": 15_000, "MIXED_USE": 10_000}
+    return max(area * rates.get(zoning, 75), mins.get(zoning, 10_000))
+
+
+def _local_authority_fee(area: float, zoning: str) -> float:
+    rates = {"RESIDENTIAL": 35, "COMMERCIAL": 65, "INDUSTRIAL": 55, "MIXED_USE": 55}
+    return max(area * rates.get(zoning, 45), 4_000)
+
+
+def _fire_safety_fee(area: float, stories: int) -> float:
+    base = 80_000 if stories >= 5 else 50_000 if stories >= 3 else 30_000
+    return base + area * 15
+
+
+# ── Permit builder ─────────────────────────────────────────────────────────────
+
+
+def _build_permit_list(
+    area: float,
+    stories: int,
+    zoning: str,
+    construction_type: str,
+) -> list[RoadmapPermitItem]:
+    permits: list[RoadmapPermitItem] = []
+    is_new  = construction_type == "NEW_CONSTRUCTION"
+    is_demo = construction_type == "DEMOLITION"
+    is_ext  = construction_type == "EXTENSION"
+
+    # ── Phase 1 ───────────────────────────────────────────────────────────────
+
+    if is_new or is_demo or area > 100:
+        permits.append(RoadmapPermitItem(
+            id="uda",
+            name="UDA Development Permission",
+            authority="Urban Development Authority (UDA)",
+            icon_key="Building2",
+            estimated_fee_lkr=_uda_fee(area, zoning),
+            min_days=21, max_days=60,
+            mandatory=True, risk_level="HIGH", phase=1,
+            description=(
+                "Statutory approval from the Urban Development Authority for any "
+                "development within UDA-regulated zones."
+            ),
+            required_documents=[
+                "Survey plan certified by Licensed Surveyor",
+                "Architectural drawings (4 sets)",
+                "Deed of title / lease agreement",
+                "Structural drawings (for buildings > 3 stories)",
+                "Completed Form UDA/DP/01",
+            ],
+            legal_reference="Urban Development Authority Law No. 41 of 1978, Section 14",
+        ))
+
+    permits.append(RoadmapPermitItem(
+        id="local-auth",
+        name="Local Authority Building Plan Approval",
+        authority="Municipal / Urban / Pradeshiya Sabha Council",
+        icon_key="ClipboardCheck",
+        estimated_fee_lkr=_local_authority_fee(area, zoning),
+        min_days=14, max_days=45,
+        mandatory=True, risk_level="HIGH", phase=1,
+        description=(
+            "Building plan approval is mandatory before any construction activity. "
+            "The relevant local authority verifies conformity with the building regulations."
+        ),
+        required_documents=[
+            "Approved survey plan",
+            "Architectural drawings (stamped by Chartered Architect)",
+            "Structural design calculations",
+            "Soil test report (for > 2 stories)",
+            "Application form with owner signature",
+        ],
+        legal_reference="Building Regulations 1986 under Local Authorities Ordinance, Section 23",
+    ))
+
+    if area > 500 or zoning in ("INDUSTRIAL", "COMMERCIAL"):
+        fee_tier = 150_000 if area > 2_000 else 75_000 if area > 500 else 50_000
+        permits.append(RoadmapPermitItem(
+            id="cea",
+            name="CEA Environmental Clearance",
+            authority="Central Environmental Authority (CEA)",
+            icon_key="Leaf",
+            estimated_fee_lkr=fee_tier,
+            min_days=30, max_days=90,
+            mandatory=zoning == "INDUSTRIAL", risk_level="HIGH", phase=1,
+            description=(
+                "Projects above 500 m² or in industrial/commercial zones require an "
+                "environmental screening or Initial Environmental Examination (IEE)."
+            ),
+            required_documents=[
+                "Project Information Document (PID)",
+                "Environmental Impact Assessment report",
+                "Site plan showing buffer zones",
+                "Drainage disposal plan",
+                "EIA application form (CEA/EIA/01)",
+            ],
+            legal_reference="National Environmental Act No. 47 of 1980, Section 23(cc)",
+        ))
+
+    if zoning in ("COMMERCIAL", "INDUSTRIAL") or area > 1_000:
+        permits.append(RoadmapPermitItem(
+            id="rda",
+            name="Road Access / Deviation Permit",
+            authority="Road Development Authority (RDA)",
+            icon_key="Map",
+            estimated_fee_lkr=100_000 if zoning == "INDUSTRIAL" else 45_000,
+            min_days=14, max_days=30,
+            mandatory=False, risk_level="MEDIUM", phase=1,
+            description=(
+                "Required when construction activities involve or affect a national road, "
+                "access deviation, or hoarding on a road reserve."
+            ),
+            required_documents=[
+                "Site location plan",
+                "Traffic impact assessment",
+                "Proposed road access layout",
+                "RDA application form",
+            ],
+            legal_reference="Road Development Authority Act No. 73 of 1981, Section 8",
+        ))
+
+    # ── Phase 2 ───────────────────────────────────────────────────────────────
+
+    if stories >= 3 or area > 1_000 or zoning in ("COMMERCIAL", "INDUSTRIAL"):
+        permits.append(RoadmapPermitItem(
+            id="fire",
+            name="Fire Safety Certificate",
+            authority="Sri Lanka Fire Department / District Fire Brigade",
+            icon_key="Flame",
+            estimated_fee_lkr=_fire_safety_fee(area, stories),
+            min_days=10, max_days=30,
+            mandatory=stories >= 3 or zoning == "COMMERCIAL",
+            risk_level="HIGH" if stories >= 5 else "MEDIUM",
+            phase=2,
+            description=(
+                "Issued after inspection of fire suppression systems, emergency exits, "
+                "fire-rated doors, and fire detection installations."
+            ),
+            required_documents=[
+                "Fire protection system drawings",
+                "Fire compartmentation plan",
+                "Sprinkler system layout",
+                "Emergency evacuation plan",
+                "Hydrant installation certificate",
+            ],
+            legal_reference="Fire Services Act No. 24 of 1974; SLSI SLS 1390 Fire Safety Standard",
+        ))
+
+    if is_new or is_ext:
+        permits.append(RoadmapPermitItem(
+            id="electrical",
+            name="Electrical Supply Connection Approval",
+            authority="Lanka Electricity Company (LECO) / Ceylon Electricity Board (CEB)",
+            icon_key="Zap",
+            estimated_fee_lkr=45_000 if stories >= 3 else 20_000,
+            min_days=7, max_days=21,
+            mandatory=True, risk_level="MEDIUM", phase=2,
+            description=(
+                "Approval for new electrical supply connection, including load application "
+                "and metering installation inspection."
+            ),
+            required_documents=[
+                "Electrical installation drawings",
+                "Single-line diagram",
+                "Load calculation sheet",
+                "Registered electrical contractor certification",
+                "Completed CEB/LECO application form",
+            ],
+            legal_reference="Electricity Act No. 20 of 2009, Section 44; IEE Wiring Regulations BS 7671",
+        ))
+
+        permits.append(RoadmapPermitItem(
+            id="water",
+            name="Water Supply & Drainage Connection",
+            authority="National Water Supply & Drainage Board (NWSDB)",
+            icon_key="Droplets",
+            estimated_fee_lkr=25_000,
+            min_days=10, max_days=25,
+            mandatory=True, risk_level="MEDIUM", phase=2,
+            description=(
+                "Connection approval for potable water supply and sewage/drainage "
+                "tie-in to the municipal network."
+            ),
+            required_documents=[
+                "Plumbing layout drawings",
+                "Sewage disposal plan",
+                "Water demand calculation",
+                "NWSDB application form",
+            ],
+            legal_reference="National Water Supply & Drainage Board Law No. 2 of 1974, Section 15",
+        ))
+
+    # ── Phase 3 ───────────────────────────────────────────────────────────────
+
+    permits.append(RoadmapPermitItem(
+        id="coc",
+        name="Certificate of Conformity (CoC)",
+        authority="Local Authority / Chartered Engineer",
+        icon_key="BadgeCheck",
+        estimated_fee_lkr=15_000,
+        min_days=7, max_days=21,
+        mandatory=True, risk_level="HIGH", phase=3,
+        description=(
+            "Issued by the local authority after final inspection confirms that all "
+            "completed work conforms to the approved plans and building regulations."
+        ),
+        required_documents=[
+            "As-built drawings",
+            "Structural completion certificate (Chartered Engineer)",
+            "Electrical inspection certificate",
+            "Plumbing completion certificate",
+            "Fire safety completion report",
+        ],
+        legal_reference="Building Regulations 1986, Section 36; UDA Circular No. 2022/01",
+    ))
+
+    if zoning in ("COMMERCIAL", "INDUSTRIAL") or stories >= 3:
+        permits.append(RoadmapPermitItem(
+            id="occupancy",
+            name="Certificate of Occupancy",
+            authority="Local Authority / UDA",
+            icon_key="HardHat",
+            estimated_fee_lkr=20_000,
+            min_days=14, max_days=30,
+            mandatory=True, risk_level="HIGH", phase=3,
+            description=(
+                "Authorises legal occupation of the building. Issued only after all "
+                "Phase 1 & 2 clearances and the Certificate of Conformity are in order."
+            ),
+            required_documents=[
+                "Certificate of Conformity",
+                "Fire Safety Certificate",
+                "LECO/CEB connection certificate",
+                "NWSDB connection certificate",
+                "Structural completion report",
+            ],
+            legal_reference=(
+                "Urban Development Authority Law No. 41 of 1978, Section 19; "
+                "Building Regulations 1986, Section 38"
+            ),
+        ))
+
+    return permits
+
+
+# ── Risk-alert builder ─────────────────────────────────────────────────────────
+
+
+def _build_roadmap_risk_alerts(
+    area: float,
+    stories: int,
+    zoning: str,
+    construction_type: str,
+    project_value_lkr: float | None,
+) -> list[RoadmapRiskAlert]:
+    alerts: list[RoadmapRiskAlert] = []
+    value = project_value_lkr or 0.0
+
+    if stories >= 5:
+        alerts.append(RoadmapRiskAlert(
+            id="risk-highrise",
+            severity="HIGH",
+            title="High-Rise Building — Multi-Authority Coordination Required",
+            message=(
+                f"Buildings of {stories} stories require simultaneous coordination across "
+                "UDA, Local Authority, Fire Department, and LECO. Fire safety inspections "
+                "are mandatory at multiple construction stages. Engage a Chartered Architect "
+                "and a Fire Safety Consultant before commencing structural works."
+            ),
+            penalty_lkr=round(value * 0.10) if value > 0 else 1_000_000,
+            daily_accrual_lkr=10_000,
+            stop_work=False,
+            statute="Fire Services Act No. 24 of 1974; UDA Law No. 41 of 1978",
+            corrective_action=(
+                "Appoint a dedicated Compliance Manager. Prepare a parallel permit "
+                "submission schedule to minimise critical-path delays."
+            ),
+        ))
+
+    if zoning == "INDUSTRIAL":
+        alerts.append(RoadmapRiskAlert(
+            id="risk-industrial-cea",
+            severity="HIGH",
+            title="Industrial Zone — CEA Environmental Clearance is Mandatory",
+            message=(
+                "All industrial developments require a mandatory Initial Environmental "
+                "Examination (IEE) from the Central Environmental Authority. The CEA "
+                "review process takes 30–90 days and is a hard blocker for foundation work."
+            ),
+            penalty_lkr=500_000,
+            daily_accrual_lkr=5_000,
+            stop_work=False,
+            statute="National Environmental Act No. 47 of 1980, Section 23(cc)",
+            corrective_action=(
+                "Commission an IEE from a registered environmental consultant before any "
+                "other permit submission. Aim to submit within the first month of the project."
+            ),
+        ))
+
+    if construction_type == "DEMOLITION":
+        alerts.append(RoadmapRiskAlert(
+            id="risk-demolition",
+            severity="HIGH",
+            title="Demolition Works — Hazardous Materials Survey Required",
+            message=(
+                "Before any demolition activity, a hazardous materials survey (including "
+                "asbestos) is required under the Factory Ordinance and CEA regulations. "
+                "Unauthorised demolition without UDA approval can result in immediate "
+                "stop-work and prosecution."
+            ),
+            penalty_lkr=750_000,
+            daily_accrual_lkr=7_500,
+            stop_work=True,
+            statute="UDA Law No. 41 of 1978, Section 14; Factory Ordinance No. 45 of 1942",
+            corrective_action=(
+                "Obtain UDA Development Permission and a hazardous materials survey report "
+                "before commencing any demolition. Engage a specialist demolition contractor "
+                "licensed by the CIDA."
+            ),
+        ))
+
+    if area > 2_000 and zoning == "COMMERCIAL":
+        alerts.append(RoadmapRiskAlert(
+            id="risk-large-commercial",
+            severity="MEDIUM",
+            title="Large Commercial Development — Extended Review Timelines",
+            message=(
+                f"Commercial projects exceeding 2,000 m² (your project: {area:,.0f} m²) "
+                "typically face extended CEA and RDA review periods. Both must be resolved "
+                "before construction commences."
+            ),
+            penalty_lkr=250_000,
+            daily_accrual_lkr=None,
+            stop_work=False,
+            statute=(
+                "National Environmental Act No. 47 of 1980; "
+                "Road Development Authority Act No. 73 of 1981"
+            ),
+            corrective_action=(
+                "Begin CEA and RDA applications simultaneously at project kick-off. "
+                "Assign a dedicated coordinator for environmental document preparation."
+            ),
+        ))
+
+    if construction_type == "NEW_CONSTRUCTION" and stories >= 3:
+        alerts.append(RoadmapRiskAlert(
+            id="risk-multi-story-structural",
+            severity="MEDIUM",
+            title="Multi-Story Structure — Soil & Structural Design Certification Required",
+            message=(
+                f"Your {stories}-story building requires a certified Soil Test Report and "
+                "Structural Design Calculation submitted alongside the Local Authority "
+                "application. Missing these delays approval by 2–4 weeks."
+            ),
+            penalty_lkr=None,
+            daily_accrual_lkr=None,
+            stop_work=False,
+            statute="Building Regulations 1986, Section 23; ICTAD SCA/2",
+            corrective_action=(
+                "Commission a soil investigation report and engage a Chartered Structural "
+                "Engineer at the design stage. Have all structural calculations stamped "
+                "before plan submission."
+            ),
+        ))
+
+    return alerts
+
+
+@router.post(
+    "/roadmap",
+    response_model=RoadmapResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Generate a permit approval roadmap from building parameters",
+    description=(
+        "Accepts building parameters (floor area, stories, zoning, construction type) "
+        "and returns the full three-phase approval roadmap: required permits with fee "
+        "estimates and processing timelines, plus proactive risk alerts specific to the "
+        "project characteristics. Requires a valid JWT Bearer token."
+    ),
+)
+async def generate_roadmap(
+    body: Annotated[RoadmapBuildingParams, Body()],
+    _payload: Annotated[dict, Depends(require_auth)],
+) -> RoadmapResponse:
+    permits = _build_permit_list(
+        area=body.floor_area,
+        stories=body.stories,
+        zoning=body.zoning_type,
+        construction_type=body.construction_type,
+    )
+
+    risk_alerts = _build_roadmap_risk_alerts(
+        area=body.floor_area,
+        stories=body.stories,
+        zoning=body.zoning_type,
+        construction_type=body.construction_type,
+        project_value_lkr=body.project_value_lkr,
+    )
+
+    total_fee      = sum(p.estimated_fee_lkr for p in permits)
+    max_days       = max((p.max_days for p in permits), default=0)
+    mandatory_count = sum(1 for p in permits if p.mandatory)
+    high_risk_count = sum(1 for p in permits if p.risk_level == "HIGH")
+
+    logger.info(
+        "Roadmap generated | zoning=%s type=%s area=%.0f stories=%d permits=%d alerts=%d",
+        body.zoning_type,
+        body.construction_type,
+        body.floor_area,
+        body.stories,
+        len(permits),
+        len(risk_alerts),
+    )
+
+    return RoadmapResponse(
+        permits=permits,
+        risk_alerts=risk_alerts,
+        summary=RoadmapSummary(
+            total_permits=len(permits),
+            mandatory_count=mandatory_count,
+            estimated_total_fee_lkr=round(total_fee, 2),
+            max_timeline_days=max_days,
+            high_risk_count=high_risk_count,
+        ),
+    )
+
+
 @router.get(
     "/{project_id}/status",
     response_model=ProjectComplianceResponse,
