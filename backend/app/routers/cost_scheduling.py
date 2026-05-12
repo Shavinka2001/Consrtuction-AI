@@ -690,46 +690,103 @@ def get_lifecycle_service() -> LifecycleDegradationService:
 
 class LifecyclePredictionRequest(BaseModel):
     """
-    Exactly 4 features expected by lifecycle_model.pkl, case-sensitive,
-    in training order: Material_Type, Distance_to_Sea_m, Humidity_Level,
-    Maintenance_Cost_Percentage.
+    Exactly 13 features expected by lifecycle_model.pkl, in training order.
+    Categorical fields accept string labels; the service layer encodes them
+    to integers via the label-encoding dictionary.
     """
 
-    Material_Type: int = Field(
+    building_type: str = Field(
         ...,
-        ge=0,
-        le=2,
-        description="Encoded material category. 0 = Concrete, 1 = Steel, 2 = Timber.",
-        examples=[0],
+        description="Primary occupancy type (e.g. 'Residential', 'Commercial').",
+        examples=["Residential"],
     )
-    Distance_to_Sea_m: float = Field(
+    foundation_type: str = Field(
+        ...,
+        description="Foundation category (e.g. 'Pile', 'Raft', 'Strip').",
+        examples=["Pile"],
+    )
+    superstructure_type: str = Field(
+        ...,
+        description="Structural frame type (e.g. 'Concrete_Frame', 'Steel_Frame').",
+        examples=["Concrete_Frame"],
+    )
+    roofing_material: str = Field(
+        ...,
+        description="Primary roofing material (e.g. 'Tiles', 'Metal', 'Membrane').",
+        examples=["Tiles"],
+    )
+    plumbing_system: str = Field(
+        ...,
+        description="Plumbing pipe material (e.g. 'Copper', 'PVC', 'PEX').",
+        examples=["Copper"],
+    )
+    electrical_system: str = Field(
+        ...,
+        description="Electrical system type (e.g. 'Standard', 'Solar_Hybrid').",
+        examples=["Standard"],
+    )
+    exterior_finish: str = Field(
+        ...,
+        description="External cladding / finish (e.g. 'Brick', 'Render', 'Stone').",
+        examples=["Brick"],
+    )
+    hvac_system: str = Field(
+        ...,
+        description="HVAC system type (e.g. 'Central_Air', 'Split_System', 'None').",
+        examples=["Central_Air"],
+    )
+    age: float = Field(
         ...,
         ge=0.0,
-        description="Straight-line distance from the structure to the nearest coastline in metres.",
-        examples=[5000.0],
+        le=300.0,
+        description="Current age of the structure in years.",
+        examples=[20.0],
     )
-    Humidity_Level: float = Field(
+    environmental_harshness: float = Field(
         ...,
-        ge=0.0,
-        le=100.0,
-        description="Average annual relative humidity at the site (percentage, 0–100).",
-        examples=[65.0],
+        ge=1.0,
+        le=10.0,
+        description="Environmental exposure severity score: 1 (mild/inland) – 10 (extreme/coastal).",
+        examples=[5.0],
     )
-    Maintenance_Cost_Percentage: float = Field(
+    soil_acidity: float = Field(
         ...,
-        ge=0.0,
-        le=100.0,
-        description="Annual maintenance expenditure expressed as a percentage of the asset replacement value.",
-        examples=[2.5],
+        ge=3.0,
+        le=9.0,
+        description="Soil pH at foundation level. 7.0 = neutral; lower = more acidic.",
+        examples=[7.0],
+    )
+    maintenance_interval: float = Field(
+        ...,
+        ge=1.0,
+        le=12.0,
+        description="Months between scheduled maintenance inspections (1 = monthly, 12 = annually).",
+        examples=[6.0],
+    )
+    material_quality: float = Field(
+        ...,
+        ge=1.0,
+        le=10.0,
+        description="Overall material quality rating: 1 (very poor) – 10 (excellent).",
+        examples=[7.0],
     )
 
     model_config = {
         "json_schema_extra": {
             "example": {
-                "Material_Type": 0,
-                "Distance_to_Sea_m": 5000.0,
-                "Humidity_Level": 65.0,
-                "Maintenance_Cost_Percentage": 2.5,
+                "building_type": "Residential",
+                "foundation_type": "Pile",
+                "superstructure_type": "Concrete_Frame",
+                "roofing_material": "Tiles",
+                "plumbing_system": "Copper",
+                "electrical_system": "Standard",
+                "exterior_finish": "Brick",
+                "hvac_system": "Central_Air",
+                "age": 20.0,
+                "environmental_harshness": 5.0,
+                "soil_acidity": 7.0,
+                "maintenance_interval": 6.0,
+                "material_quality": 7.0,
             }
         }
     }
@@ -803,10 +860,19 @@ async def predict_lifecycle(
     # ── Run prediction ─────────────────────────────────────────────────────────
     try:
         prediction = svc.predict(
-            Material_Type=body.Material_Type,
-            Distance_to_Sea_m=body.Distance_to_Sea_m,
-            Humidity_Level=body.Humidity_Level,
-            Maintenance_Cost_Percentage=body.Maintenance_Cost_Percentage,
+            building_type=body.building_type,
+            foundation_type=body.foundation_type,
+            superstructure_type=body.superstructure_type,
+            roofing_material=body.roofing_material,
+            plumbing_system=body.plumbing_system,
+            electrical_system=body.electrical_system,
+            exterior_finish=body.exterior_finish,
+            hvac_system=body.hvac_system,
+            age=body.age,
+            environmental_harshness=body.environmental_harshness,
+            soil_acidity=body.soil_acidity,
+            maintenance_interval=body.maintenance_interval,
+            material_quality=body.material_quality,
         )
     except LifecycleModelNotAvailableError as exc:
         raise HTTPException(
@@ -841,10 +907,19 @@ async def predict_lifecycle(
         expert_recommendation=advisory,
         model_confidence=prediction.confidence,
         input_echo={
-            "Material_Type": body.Material_Type,
-            "Distance_to_Sea_m": body.Distance_to_Sea_m,
-            "Humidity_Level": body.Humidity_Level,
-            "Maintenance_Cost_Percentage": body.Maintenance_Cost_Percentage,
+            "building_type": body.building_type,
+            "foundation_type": body.foundation_type,
+            "superstructure_type": body.superstructure_type,
+            "roofing_material": body.roofing_material,
+            "plumbing_system": body.plumbing_system,
+            "electrical_system": body.electrical_system,
+            "exterior_finish": body.exterior_finish,
+            "hvac_system": body.hvac_system,
+            "age": body.age,
+            "environmental_harshness": body.environmental_harshness,
+            "soil_acidity": body.soil_acidity,
+            "maintenance_interval": body.maintenance_interval,
+            "material_quality": body.material_quality,
         },
     )
 

@@ -125,7 +125,7 @@ class ClashDetails(BaseModel):
 
 @app.post("/api/generate-recommendation", tags=["AI"])
 async def generate_recommendation(request: ClashDetails) -> dict:
-    """Use Gemini to produce a technical resolution recommendation for a detected clash."""
+    """Use Gemini to produce a plain-text AI suggestion for resolving a detected clash."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY is not set in environment.")
@@ -136,18 +136,19 @@ async def generate_recommendation(request: ClashDetails) -> dict:
             http_options=genai_types.HttpOptions(api_version="v1"),
         )
         prompt = (
-            f"You are an expert Structural/MEP Engineer. "
+            f"You are a Senior Structural/MEP BIM Engineer. "
             f"A construction clash was detected involving a '{request.className}' "
             f"at coordinates X:{request.x}, Y:{request.y} with {request.severity} severity. "
-            f"Provide a 2-sentence highly technical, actionable recommendation on how to "
-            f"resolve this for the site engineer."
+            f"Write a single, professional paragraph providing an AI Suggestion to resolve this clash. "
+            f"Include relevant BIM coordination steps, MEP routing considerations, or structural integrity measures as appropriate."
         )
         response = client.models.generate_content(
             model="gemini-1.5-flash",
             contents=prompt,
         )
+        suggestion = response.text.strip()
         logger.info("Gemini recommendation generated for class='%s'", request.className)
-        return {"recommendation": response.text}
+        return {"recommendation": suggestion}
     except Exception as exc:
         logger.error("Gemini generation failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"Failed to generate recommendation: {exc}") from exc

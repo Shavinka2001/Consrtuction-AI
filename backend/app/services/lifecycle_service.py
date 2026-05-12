@@ -72,14 +72,75 @@ _RISK_THRESHOLDS: list[tuple[float, str]] = [
 # Case-sensitive — these are the exact column names the model was trained with.
 
 _FEATURE_COLUMNS: list[str] = [
-    "Material_Type",
-    "Distance_to_Sea_m",
-    "Humidity_Level",
-    "Maintenance_Cost_Percentage",
+    "building_type",
+    "foundation_type",
+    "superstructure_type",
+    "roofing_material",
+    "plumbing_system",
+    "electrical_system",
+    "exterior_finish",
+    "hvac_system",
+    "age",
+    "environmental_harshness",
+    "soil_acidity",
+    "maintenance_interval",
+    "material_quality",
 ]
 
-# Material_Type is already supplied as an integer (0, 1, 2) by the caller.
-# No label-encoding dictionary is needed for this model.
+# ── Label encoding dictionaries for categorical features ───────────────────────
+# Keys are the string values sent from the frontend; values are the integer codes
+# used during model training.  A missing key falls back to 0 (safe default).
+
+_LABEL_ENCODINGS: dict[str, dict[str, int]] = {
+    "building_type": {
+        "Residential": 0, "Commercial": 1, "Industrial": 2, "Healthcare": 3,
+        "Educational": 4, "Mixed-Use": 5, "Warehouse": 6, "Hotel": 7,
+    },
+    "foundation_type": {
+        "Shallow": 0, "Deep": 1, "Pile": 2, "Raft": 3,
+        "Strip": 4, "Pad": 5, "Caisson": 6,
+    },
+    "superstructure_type": {
+        "Concrete_Frame": 0, "Steel_Frame": 1, "Timber_Frame": 2,
+        "Masonry": 3, "Composite": 4,
+    },
+    "roofing_material": {
+        "Tiles": 0, "Metal": 1, "Asphalt": 2, "Concrete": 3,
+        "Membrane": 4, "Thatch": 5, "Glass": 6,
+    },
+    "plumbing_system": {
+        "Copper": 0, "PVC": 1, "Galvanized_Steel": 2,
+        "PEX": 3, "CPVC": 4, "Cast_Iron": 5,
+    },
+    "electrical_system": {
+        "Standard": 0, "High_Capacity": 1, "Solar_Hybrid": 2,
+        "Backup_Generator": 3, "Smart_Grid": 4,
+    },
+    "exterior_finish": {
+        "Brick": 0, "Render": 1, "Timber_Cladding": 2, "Metal_Cladding": 3,
+        "Glass_Curtain": 4, "Stone": 5, "EIFS": 6,
+    },
+    "hvac_system": {
+        "Central_Air": 0, "Split_System": 1, "Underfloor": 2,
+        "Radiant": 3, "Chiller": 4, "None": 5,
+    },
+}
+
+
+def _encode(feature: str, value: str) -> int:
+    """Safely label-encode a categorical string value.
+
+    Returns the integer code for *value* in *feature*'s dictionary,
+    or 0 if the value is not found (prevents NoneType / KeyError errors).
+    """
+    code = _LABEL_ENCODINGS.get(feature, {}).get(value, None)
+    if code is None:
+        logger.warning(
+            "[lifecycle_service._encode] Unknown value '%s' for feature '%s' — defaulting to 0.",
+            value, feature,
+        )
+        return 0
+    return code
 
 
 # ── Return type ────────────────────────────────────────────────────────────────
@@ -183,16 +244,27 @@ class LifecycleDegradationService:
 
     def predict(
         self,
-        Material_Type: int,
-        Distance_to_Sea_m: float,
-        Humidity_Level: float,
-        Maintenance_Cost_Percentage: float,
+        building_type: str,
+        foundation_type: str,
+        superstructure_type: str,
+        roofing_material: str,
+        plumbing_system: str,
+        electrical_system: str,
+        exterior_finish: str,
+        hvac_system: str,
+        age: float,
+        environmental_harshness: float,
+        soil_acidity: float,
+        maintenance_interval: float,
+        material_quality: float,
     ) -> LifecyclePrediction:
         """
         Run a lifecycle degradation prediction.
 
-        Assembles a pandas DataFrame with the exact 4 column names the model
-        was trained with (case-sensitive) and calls model.predict().
+        Categorical string features are label-encoded via ``_LABEL_ENCODINGS``
+        before being passed to the model.  Unknown strings default to 0.
+        Assembles a pandas DataFrame with the exact 13 column names in training
+        order and calls model.predict().
 
         Raises
         ──────
@@ -206,10 +278,19 @@ class LifecycleDegradationService:
             )
 
         row = {
-            "Material_Type":              int(Material_Type),
-            "Distance_to_Sea_m":          float(Distance_to_Sea_m),
-            "Humidity_Level":             float(Humidity_Level),
-            "Maintenance_Cost_Percentage": float(Maintenance_Cost_Percentage),
+            "building_type":          _encode("building_type", building_type),
+            "foundation_type":        _encode("foundation_type", foundation_type),
+            "superstructure_type":    _encode("superstructure_type", superstructure_type),
+            "roofing_material":       _encode("roofing_material", roofing_material),
+            "plumbing_system":        _encode("plumbing_system", plumbing_system),
+            "electrical_system":      _encode("electrical_system", electrical_system),
+            "exterior_finish":        _encode("exterior_finish", exterior_finish),
+            "hvac_system":            _encode("hvac_system", hvac_system),
+            "age":                    float(age),
+            "environmental_harshness": float(environmental_harshness),
+            "soil_acidity":           float(soil_acidity),
+            "maintenance_interval":   float(maintenance_interval),
+            "material_quality":       float(material_quality),
         }
 
         # Build DataFrame with exact column names in training order
@@ -217,9 +298,9 @@ class LifecycleDegradationService:
 
         logger.debug("Lifecycle prediction input DataFrame:\n%s", X.to_string())
         logger.info(
-            "Running lifecycle prediction | Material_Type=%d Distance_to_Sea_m=%.1f "
-            "Humidity_Level=%.1f Maintenance_Cost_Percentage=%.2f",
-            Material_Type, Distance_to_Sea_m, Humidity_Level, Maintenance_Cost_Percentage,
+            "Running lifecycle prediction | building_type=%s age=%.0f "
+            "environmental_harshness=%.1f soil_acidity=%.2f material_quality=%.1f",
+            building_type, age, environmental_harshness, soil_acidity, material_quality,
         )
 
         try:
@@ -247,8 +328,8 @@ class LifecycleDegradationService:
                 break
 
         logger.info(
-            "Lifecycle prediction | Material_Type=%d → %.1f yrs [%s]",
-            Material_Type, lifespan, risk_level,
+            "Lifecycle prediction | building_type=%s age=%.0f → %.1f yrs [%s]",
+            building_type, age, lifespan, risk_level,
         )
 
         return LifecyclePrediction(

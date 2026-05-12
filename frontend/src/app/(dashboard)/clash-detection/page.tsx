@@ -126,11 +126,42 @@ function AnnotatedBlueprint({
   blueprintUrl,
   boxes,
   hoveredIssueId,
+  onBlobError,
 }: {
   blueprintUrl: string;
   boxes: BoundingBox[];
   hoveredIssueId: string | null;
+  onBlobError?: () => void;
 }) {
+  const [imgError, setImgError] = useState(false);
+
+  const handleImgError = useCallback(() => {
+    setImgError(true);
+    onBlobError?.();
+  }, [onBlobError]);
+
+  // Blob URLs are revoked after a Fast Refresh or page reload — show a
+  // recovery UI instead of a broken image.
+  if (imgError && blueprintUrl.startsWith('blob:')) {
+    return (
+      <div
+        className="relative w-full overflow-hidden rounded-lg bg-gray-100 dark:bg-industrial-surface-2 flex flex-col items-center justify-center gap-3 py-14"
+        style={{ aspectRatio: '4/3' }}
+      >
+        <UploadCloud className="h-10 w-10 text-gray-300 dark:text-industrial-muted" />
+        <p className="text-sm font-medium text-gray-500 dark:text-industrial-muted">
+          Session expired — blueprint is no longer available.
+        </p>
+        <Link
+          href="/upload"
+          className="mt-1 rounded-lg bg-industrial-accent px-4 py-2 text-sm font-bold text-black shadow-sm hover:bg-industrial-accent-hover active:scale-95 transition-all duration-150"
+        >
+          Session expired. Please re-upload the plan.
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div
       className="relative w-full overflow-hidden rounded-lg bg-gray-100 dark:bg-industrial-surface-2"
@@ -142,6 +173,7 @@ function AnnotatedBlueprint({
         fill
         className="object-contain p-2"
         unoptimized={blueprintUrl.startsWith('blob:')}
+        onError={handleImgError}
       />
       {boxes.map((box) => {
         const isHovered = box.id === hoveredIssueId;
@@ -336,13 +368,18 @@ function IssueDrawer({
                     <div className="h-2.5 w-3/5 animate-pulse rounded bg-indigo-100 dark:bg-indigo-500/20" />
                   </div>
                 </div>
+              ) : aiRecommendation ? (
+                <div className="flex items-start gap-2">
+                  <Zap className="mt-0.5 h-4 w-4 shrink-0 text-indigo-400" />
+                  <p className="text-sm text-indigo-800 dark:text-indigo-200 leading-relaxed">
+                    {aiRecommendation}
+                  </p>
+                </div>
               ) : (
                 <div className="flex items-start gap-2">
                   <Zap className="mt-0.5 h-4 w-4 shrink-0 text-indigo-400" />
                   <p className="text-sm text-indigo-800 dark:text-indigo-300 leading-relaxed">
-                    <span className="font-semibold">AI Suggestion: </span>
-                    {aiRecommendation ??
-                      "Click an issue to generate a recommendation."}
+                    Click an issue to generate a recommendation.
                   </p>
                 </div>
               )}
@@ -474,6 +511,20 @@ export default function ClashDetectionPage() {
   const handleCloseDrawer = useCallback(() => {
     setSelectedIssue(null);
     setAiRecommendation(null);
+  }, []);
+
+  // ── Blob error recovery ────────────────────────────────────────────────
+  // Called by AnnotatedBlueprint when the blob URL is dead (e.g. after
+  // Fast Refresh). Clear stale state so the empty-state UI is shown.
+  const handleBlobError = useCallback(() => {
+    setAnalysis(null);
+    setSelectedIssue(null);
+    setAiRecommendation(null);
+    try {
+      localStorage.removeItem('latest_analysis');
+    } catch {
+      // localStorage unavailable — ignore
+    }
   }, []);
 
   // ── PDF export ─────────────────────────────────────────────────────────
@@ -649,7 +700,7 @@ export default function ClashDetectionPage() {
                   </p>
                 </div>
                 <div className="p-4">
-                  <AnnotatedBlueprint blueprintUrl={blueprintUrl} boxes={derivedBoxes} hoveredIssueId={hoveredIssueId} />
+                  <AnnotatedBlueprint blueprintUrl={blueprintUrl} boxes={derivedBoxes} hoveredIssueId={hoveredIssueId} onBlobError={handleBlobError} />
                 </div>
                 {/* Legend */}
                 <div className="flex flex-wrap gap-4 border-t border-gray-100 dark:border-industrial-border px-5 py-3">

@@ -4,26 +4,39 @@ import { useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  Building2,
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Cpu,
   Droplets,
   Gauge,
+  Layers,
   Loader2,
   ShieldAlert,
   Sparkles,
-  Waves,
+  Thermometer,
   Wrench,
+  Zap,
 } from 'lucide-react';
 import api from '@/lib/api';
 
 // â”€â”€ API types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface PredictionRequest {
-  Material_Type: number;
-  Distance_to_Sea_m: number;
-  Humidity_Level: number;
-  Maintenance_Cost_Percentage: number;
+  building_type: string;
+  foundation_type: string;
+  superstructure_type: string;
+  roofing_material: string;
+  plumbing_system: string;
+  electrical_system: string;
+  exterior_finish: string;
+  hvac_system: string;
+  age: number;
+  environmental_harshness: number;
+  soil_acidity: number;
+  maintenance_interval: number;
+  material_quality: number;
 }
 
 interface PredictionResponse {
@@ -31,30 +44,58 @@ interface PredictionResponse {
   risk_level: 'High' | 'Medium' | 'Low';
   expert_recommendation: string;
   model_confidence: number | null;
-  input_echo: PredictionRequest;
+  input_echo: Record<string, string | number>;
 }
 
 // â”€â”€ Form state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface FormState {
-  Material_Type: string;
-  Distance_to_Sea_m: string;
-  Humidity_Level: string;
-  Maintenance_Cost_Percentage: string;
+  building_type: string;
+  foundation_type: string;
+  superstructure_type: string;
+  roofing_material: string;
+  plumbing_system: string;
+  electrical_system: string;
+  exterior_finish: string;
+  hvac_system: string;
+  age: string;
+  environmental_harshness: string;
+  soil_acidity: string;
+  maintenance_interval: string;
+  material_quality: string;
 }
 
 const DEFAULT_FORM: FormState = {
-  Material_Type: '0',
-  Distance_to_Sea_m: '5000',
-  Humidity_Level: '65',
-  Maintenance_Cost_Percentage: '2.5',
+  building_type: 'Residential',
+  foundation_type: 'Pile',
+  superstructure_type: 'Concrete_Frame',
+  roofing_material: 'Tiles',
+  plumbing_system: 'Copper',
+  electrical_system: 'Standard',
+  exterior_finish: 'Brick',
+  hvac_system: 'Central_Air',
+  age: '20',
+  environmental_harshness: '5',
+  soil_acidity: '7.0',
+  maintenance_interval: '6',
+  material_quality: '7',
 };
 
-const MATERIAL_LABELS: Record<string, string> = {
-  '0': 'Concrete',
-  '1': 'Steel',
-  '2': 'Timber',
+// ── Dropdown option lists (must match backend _LABEL_ENCODINGS keys) ────────────
+
+const OPTIONS: Record<string, string[]> = {
+  building_type:       ['Residential', 'Commercial', 'Industrial', 'Healthcare', 'Educational', 'Mixed-Use', 'Warehouse', 'Hotel'],
+  foundation_type:     ['Shallow', 'Deep', 'Pile', 'Raft', 'Strip', 'Pad', 'Caisson'],
+  superstructure_type: ['Concrete_Frame', 'Steel_Frame', 'Timber_Frame', 'Masonry', 'Composite'],
+  roofing_material:    ['Tiles', 'Metal', 'Asphalt', 'Concrete', 'Membrane', 'Thatch', 'Glass'],
+  plumbing_system:     ['Copper', 'PVC', 'Galvanized_Steel', 'PEX', 'CPVC', 'Cast_Iron'],
+  electrical_system:   ['Standard', 'High_Capacity', 'Solar_Hybrid', 'Backup_Generator', 'Smart_Grid'],
+  exterior_finish:     ['Brick', 'Render', 'Timber_Cladding', 'Metal_Cladding', 'Glass_Curtain', 'Stone', 'EIFS'],
+  hvac_system:         ['Central_Air', 'Split_System', 'Underfloor', 'Radiant', 'Chiller', 'None'],
 };
+
+/** Replace underscores with spaces for display */
+const toLabel = (v: string) => v.replace(/_/g, ' ');
 
 // â”€â”€ Helper: risk-level config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -90,6 +131,55 @@ const RISK_CONFIG = {
 
 // â”€â”€ Slider input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// ── Shared input class names ────────────────────────────────────────────────────────────────────────────
+
+const SELECT_CLS =
+  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 ' +
+  'focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent cursor-pointer';
+
+const INPUT_CLS =
+  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 ' +
+  'focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent';
+
+// ── Dropdown field ─────────────────────────────────────────────────────────────────────────
+
+interface DropdownFieldProps {
+  id: string;
+  label: string;
+  icon: React.ElementType;
+  value: string;
+  options: string[];
+  description: string;
+  onChange: (v: string) => void;
+}
+
+function DropdownField({ id, label: fieldLabel, icon: Icon, value, options, description, onChange }: DropdownFieldProps) {
+  return (
+    <div className="space-y-1.5">
+      <label
+        htmlFor={id}
+        className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase tracking-wide"
+      >
+        <Icon className="h-3.5 w-3.5 text-orange-500" />
+        {fieldLabel}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={SELECT_CLS}
+      >
+        {options.map((opt) => (
+          <option key={opt} value={opt}>{toLabel(opt)}</option>
+        ))}
+      </select>
+      <p className="text-[11px] text-gray-400 leading-snug">{description}</p>
+    </div>
+  );
+}
+
+// ── Slider field ──────────────────────────────────────────────────────────────────────────
+
 interface SliderFieldProps {
   id: string;
   label: string;
@@ -103,20 +193,8 @@ interface SliderFieldProps {
   onChange: (v: string) => void;
 }
 
-function SliderField({
-  id,
-  label,
-  description,
-  icon: Icon,
-  value,
-  min,
-  max,
-  step,
-  unit = '',
-  onChange,
-}: SliderFieldProps) {
+function SliderField({ id, label: fieldLabel, description, icon: Icon, value, min, max, step, unit = '', onChange }: SliderFieldProps) {
   const pct = ((parseFloat(value) - min) / (max - min)) * 100;
-
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -125,11 +203,10 @@ function SliderField({
           className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase tracking-wide"
         >
           <Icon className="h-3.5 w-3.5 text-orange-500" />
-          {label}
+          {fieldLabel}
         </label>
         <span className="text-sm font-bold text-gray-900 tabular-nums">
-          {value}
-          {unit}
+          {value}{unit}
         </span>
       </div>
       <input
@@ -154,9 +231,50 @@ function SliderField({
           [&::-moz-range-thumb]:rounded-full
           [&::-moz-range-thumb]:bg-orange-500
           [&::-moz-range-thumb]:border-0"
-        style={{
-          background: `linear-gradient(to right, #f97316 ${pct}%, #e5e7eb ${pct}%)`,
-        }}
+        style={{ background: `linear-gradient(to right, #f97316 ${pct}%, #e5e7eb ${pct}%)` }}
+      />
+      <p className="text-[11px] text-gray-400 leading-snug">{description}</p>
+    </div>
+  );
+}
+
+// ── Number input field ──────────────────────────────────────────────────────────────────────────
+
+interface NumberFieldProps {
+  id: string;
+  label: string;
+  description: string;
+  icon: React.ElementType;
+  value: string;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+  onChange: (v: string) => void;
+}
+
+function NumberField({ id, label: fieldLabel, description, icon: Icon, value, min, max, step, unit = '', onChange }: NumberFieldProps) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <label
+          htmlFor={id}
+          className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase tracking-wide"
+        >
+          <Icon className="h-3.5 w-3.5 text-orange-500" />
+          {fieldLabel}
+          {unit && <span className="text-gray-400 normal-case font-normal ml-0.5">({unit})</span>}
+        </label>
+      </div>
+      <input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={INPUT_CLS}
       />
       <p className="text-[11px] text-gray-400 leading-snug">{description}</p>
     </div>
@@ -181,10 +299,19 @@ export default function LifecyclePredictor() {
     setResult(null);
 
     const payload: PredictionRequest = {
-      Material_Type: parseInt(form.Material_Type, 10),
-      Distance_to_Sea_m: parseFloat(form.Distance_to_Sea_m),
-      Humidity_Level: parseFloat(form.Humidity_Level),
-      Maintenance_Cost_Percentage: parseFloat(form.Maintenance_Cost_Percentage),
+      building_type:           form.building_type,
+      foundation_type:         form.foundation_type,
+      superstructure_type:     form.superstructure_type,
+      roofing_material:        form.roofing_material,
+      plumbing_system:         form.plumbing_system,
+      electrical_system:       form.electrical_system,
+      exterior_finish:         form.exterior_finish,
+      hvac_system:             form.hvac_system,
+      age:                     parseFloat(form.age),
+      environmental_harshness: parseFloat(form.environmental_harshness),
+      soil_acidity:            parseFloat(form.soil_acidity),
+      maintenance_interval:    parseFloat(form.maintenance_interval),
+      material_quality:        parseFloat(form.material_quality),
     };
 
     console.log('FINAL prediction payload:', JSON.stringify(payload, null, 2));
@@ -200,17 +327,17 @@ export default function LifecyclePredictor() {
         response?: { data?: { detail?: string | { msg: string; type: string }[] }; status?: number };
         message?: string;
       };
-      const status = axiosErr.response?.status;
+      const httpStatus = axiosErr.response?.status;
       const detail = axiosErr.response?.data?.detail;
 
-      if (status === 503) {
+      if (httpStatus === 503) {
         const backendDetail = typeof detail === 'string' ? detail : null;
         setError(
           backendDetail ??
             'The lifecycle ML model failed to load on the server. ' +
               'Check the uvicorn terminal for the exact error (version mismatch, corrupt .pkl, etc.).',
         );
-      } else if (status === 422) {
+      } else if (httpStatus === 422) {
         if (Array.isArray(detail)) {
           const messages = detail.map((d) => `${d.msg} (${d.type})`).join('; ');
           setError(`Validation error: ${messages}`);
@@ -245,7 +372,7 @@ export default function LifecyclePredictor() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-6 items-start">
         {/* â”€â”€ Left sidebar: input form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <form
           onSubmit={(e) => handleSubmit(e)}
@@ -258,100 +385,120 @@ export default function LifecyclePredictor() {
             </span>
             <div>
               <p className="text-sm font-semibold text-gray-900">Input Parameters</p>
-              <p className="text-[11px] text-gray-400">4 features â€” matches model training pipeline</p>
+              <p className="text-[11px] text-gray-400">13 features — matches model training pipeline</p>
             </div>
           </div>
 
           {/* Fields */}
           <div className="px-5 py-5 space-y-6">
-            {/* Material Type */}
-            <div className="space-y-1.5">
-              <label
-                htmlFor="Material_Type"
-                className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase tracking-wide"
-              >
-                <Wrench className="h-3.5 w-3.5 text-orange-500" />
-                Material Type
-              </label>
-              <select
-                id="Material_Type"
-                value={form.Material_Type}
-                onChange={(e) => setField('Material_Type')(e.target.value)}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800
-                  focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent cursor-pointer"
-              >
-                <option value="0">0 â€” Concrete</option>
-                <option value="1">1 â€” Steel</option>
-                <option value="2">2 â€” Timber</option>
-              </select>
-              <p className="text-[11px] text-gray-400 leading-snug">
-                Primary structural material. Encoded as integer (0, 1, or 2).
+
+            {/* Section A: Structural Characteristics */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-orange-500 mb-3">
+                Structural Characteristics
               </p>
-            </div>
-
-            <div className="border-t border-gray-100" />
-
-            {/* Distance to Sea */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label
-                  htmlFor="Distance_to_Sea_m"
-                  className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase tracking-wide"
-                >
-                  <Waves className="h-3.5 w-3.5 text-orange-500" />
-                  Distance to Sea (m)
-                </label>
-                <span className="text-sm font-bold text-gray-900 tabular-nums">
-                  {form.Distance_to_Sea_m} m
-                </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <DropdownField
+                  id="building_type" label="Building Type" icon={Building2}
+                  value={form.building_type} options={OPTIONS.building_type}
+                  description="Primary occupancy / use class."
+                  onChange={setField('building_type')}
+                />
+                <DropdownField
+                  id="foundation_type" label="Foundation Type" icon={Layers}
+                  value={form.foundation_type} options={OPTIONS.foundation_type}
+                  description="Foundation system supporting the structure."
+                  onChange={setField('foundation_type')}
+                />
+                <DropdownField
+                  id="superstructure_type" label="Superstructure" icon={Building2}
+                  value={form.superstructure_type} options={OPTIONS.superstructure_type}
+                  description="Primary load-bearing frame material."
+                  onChange={setField('superstructure_type')}
+                />
+                <DropdownField
+                  id="roofing_material" label="Roofing Material" icon={Layers}
+                  value={form.roofing_material} options={OPTIONS.roofing_material}
+                  description="Primary roof covering material."
+                  onChange={setField('roofing_material')}
+                />
+                <DropdownField
+                  id="plumbing_system" label="Plumbing System" icon={Droplets}
+                  value={form.plumbing_system} options={OPTIONS.plumbing_system}
+                  description="Domestic water / drainage pipe material."
+                  onChange={setField('plumbing_system')}
+                />
+                <DropdownField
+                  id="electrical_system" label="Electrical System" icon={Zap}
+                  value={form.electrical_system} options={OPTIONS.electrical_system}
+                  description="Main electrical supply configuration."
+                  onChange={setField('electrical_system')}
+                />
+                <DropdownField
+                  id="exterior_finish" label="Exterior Finish" icon={Wrench}
+                  value={form.exterior_finish} options={OPTIONS.exterior_finish}
+                  description="External cladding or surface finish."
+                  onChange={setField('exterior_finish')}
+                />
+                <DropdownField
+                  id="hvac_system" label="HVAC System" icon={Cpu}
+                  value={form.hvac_system} options={OPTIONS.hvac_system}
+                  description="Heating, ventilation and air-conditioning type."
+                  onChange={setField('hvac_system')}
+                />
               </div>
-              <input
-                id="Distance_to_Sea_m"
-                type="number"
-                min={0}
-                step={1}
-                value={form.Distance_to_Sea_m}
-                onChange={(e) => setField('Distance_to_Sea_m')(e.target.value)}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800
-                  focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
-              />
-              <p className="text-[11px] text-gray-400 leading-snug">
-                Straight-line distance from the structure to the nearest coastline in metres.
-              </p>
             </div>
 
             <div className="border-t border-gray-100" />
 
-            {/* Humidity Level */}
-            <SliderField
-              id="Humidity_Level"
-              label="Humidity Level (%)"
-              description="Average annual relative humidity at the site (0â€“100%). Higher values accelerate corrosion."
-              icon={Droplets}
-              value={form.Humidity_Level}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-              onChange={setField('Humidity_Level')}
-            />
-
-            <div className="border-t border-gray-100" />
-
-            {/* Maintenance Cost Percentage */}
-            <SliderField
-              id="Maintenance_Cost_Percentage"
-              label="Maintenance Cost (%)"
-              description="Annual maintenance expenditure as a percentage of the asset replacement value (0â€“100%)."
-              icon={Gauge}
-              value={form.Maintenance_Cost_Percentage}
-              min={0}
-              max={100}
-              step={0.1}
-              unit="%"
-              onChange={setField('Maintenance_Cost_Percentage')}
-            />
+            {/* Section B: Condition Parameters */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-orange-500 mb-3">
+                Condition Parameters
+              </p>
+              <div className="space-y-5">
+                <NumberField
+                  id="age" label="Structure Age" unit="years"
+                  description="Current age of the building in years (0-300)."
+                  icon={Clock3} value={form.age} min={0} max={300} step={1}
+                  onChange={setField('age')}
+                />
+                <div className="border-t border-gray-100" />
+                <SliderField
+                  id="environmental_harshness" label="Environmental Harshness"
+                  description="Exposure severity: 1 (mild/inland) to 10 (extreme/coastal/industrial)."
+                  icon={Thermometer} value={form.environmental_harshness}
+                  min={1} max={10} step={1}
+                  onChange={setField('environmental_harshness')}
+                />
+                <div className="border-t border-gray-100" />
+                <SliderField
+                  id="soil_acidity" label="Soil Acidity (pH)"
+                  description="Soil pH at foundation level. 7.0 = neutral; lower = more acidic / corrosive."
+                  icon={Droplets} value={form.soil_acidity}
+                  min={3} max={9} step={0.1} unit=" pH"
+                  onChange={setField('soil_acidity')}
+                />
+                <div className="border-t border-gray-100" />
+                <SliderField
+                  id="maintenance_interval" label="Maintenance Interval"
+                  description="Months between scheduled maintenance inspections (1 = monthly, 12 = annually)."
+                  icon={Wrench} value={form.maintenance_interval}
+                  min={1} max={12} step={1} unit=" mo"
+                  onChange={setField('maintenance_interval')}
+                />
+                <div className="border-t border-gray-100" />
+                <SliderField
+                  id="material_quality" label="Material Quality"
+                  description="Overall material quality rating: 1 (very poor) to 10 (excellent)."
+                  icon={Gauge} value={form.material_quality}
+                  min={1} max={10} step={1}
+                  onChange={setField('material_quality')}
+                />
+              </div>
+            </div>
           </div>
+
 
           {/* Submit */}
           <div className="px-5 pb-5">
@@ -367,7 +514,7 @@ export default function LifecyclePredictor() {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Analysingâ€¦
+                  Analysing...
                 </>
               ) : (
                 <>
@@ -379,7 +526,7 @@ export default function LifecyclePredictor() {
           </div>
         </form>
 
-        {/* â”€â”€ Right panel: results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Right panel: results */}
         <div className="space-y-4">
           {/* Idle / empty state */}
           {!loading && !error && !result && (
@@ -514,36 +661,31 @@ export default function LifecyclePredictor() {
                     Input Parameters Used
                   </p>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-gray-100">
-                  {[
-                    {
-                      label: 'Material Type',
-                      value: `${result.input_echo.Material_Type} â€” ${MATERIAL_LABELS[String(result.input_echo.Material_Type)] ?? '?'}`,
-                      unit: '',
-                    },
-                    {
-                      label: 'Dist. to Sea',
-                      value: result.input_echo.Distance_to_Sea_m.toFixed(0),
-                      unit: ' m',
-                    },
-                    {
-                      label: 'Humidity',
-                      value: result.input_echo.Humidity_Level.toFixed(0),
-                      unit: '%',
-                    },
-                    {
-                      label: 'Maint. Cost',
-                      value: result.input_echo.Maintenance_Cost_Percentage.toFixed(1),
-                      unit: '%',
-                    },
-                  ].map(({ label, value, unit }) => (
-                    <div key={label} className="px-4 py-3 text-center">
-                      <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide truncate">
-                        {label}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 divide-x divide-y divide-gray-100">
+                  {(
+                    [
+                      ['Building Type',   result.input_echo.building_type,          ''],
+                      ['Foundation',      result.input_echo.foundation_type,         ''],
+                      ['Superstructure',  result.input_echo.superstructure_type,     ''],
+                      ['Roofing',         result.input_echo.roofing_material,        ''],
+                      ['Plumbing',        result.input_echo.plumbing_system,         ''],
+                      ['Electrical',      result.input_echo.electrical_system,       ''],
+                      ['Exterior',        result.input_echo.exterior_finish,         ''],
+                      ['HVAC',            result.input_echo.hvac_system,             ''],
+                      ['Age',             result.input_echo.age,                     ' yrs'],
+                      ['Env. Harshness',  result.input_echo.environmental_harshness, '/ 10'],
+                      ['Soil pH',         result.input_echo.soil_acidity,            ''],
+                      ['Maint. Interval', result.input_echo.maintenance_interval,    ' mo'],
+                      ['Mat. Quality',    result.input_echo.material_quality,        '/ 10'],
+                    ] as [string, string | number, string][]
+                  ).map(([echoLabel, value, unit]) => (
+                    <div key={echoLabel} className="px-3 py-2.5 text-center">
+                      <p className="text-[9px] font-medium text-gray-400 uppercase tracking-wide truncate">
+                        {echoLabel}
                       </p>
-                      <p className="mt-1 text-base font-bold text-gray-800 tabular-nums leading-tight">
-                        {value}
-                        <span className="text-xs font-normal text-gray-400">{unit}</span>
+                      <p className="mt-0.5 text-xs font-bold text-gray-800 leading-tight truncate">
+                        {typeof value === 'string' ? toLabel(String(value)) : String(value)}
+                        <span className="text-[9px] font-normal text-gray-400">{unit}</span>
                       </p>
                     </div>
                   ))}
@@ -566,4 +708,3 @@ export default function LifecyclePredictor() {
     </div>
   );
 }
-
